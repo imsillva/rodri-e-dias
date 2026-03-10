@@ -21,10 +21,30 @@
 
 #define BUF_SIZE 5
 
+typedef enum {
+    START,
+    FLAG_READ,
+    A_READ,
+    C_READ,
+    BCC_READ,
+    STOP_ME,
+} statenames;
+
+void initME();
+statenames currentState;
+
+void initME(){
+    
+    currentState = START;
+
+}
+
 volatile int STOP = FALSE;
 
 int main(int argc, char *argv[])
 {
+    initME();
+
     // Program usage: Uses either COM1 or COM2
     const char *serialPortName = argv[1];
 
@@ -67,7 +87,7 @@ int main(int argc, char *argv[])
     // Set input mode (non-canonical, no echo,...)
     newtio.c_lflag = 0;
     newtio.c_cc[VTIME] = 0; // Inter-character timer unused
-    newtio.c_cc[VMIN] = 5;  // Blocking read until 5 chars received
+    newtio.c_cc[VMIN] = 1;  // Blocking read until 5 chars received
 
     // VTIME e VMIN should be changed in order to protect with a
     // timeout the reception of the following character(s)
@@ -94,18 +114,96 @@ int main(int argc, char *argv[])
     //while (STOP == FALSE)
     //{
         // Returns after 5 chars have been input
-        int bytes = read(fd, buf, BUF_SIZE);
+        // int bytes = read(fd, buf, BUF_SIZE);
         //buf[bytes] = '\0'; // Set end of string to '\0', so we can printf
 
         //printf(":%s:%d\n", buf, bytes);
-        for(int i=0; i<bytes; i++)
+        /*for(int i=0; i<bytes; i++)
         {
             printf("SET = 0x%02X\n", buf[i]);
         }
+        */
         //if (buf[0] == 'z')
             //STOP = TRUE;
     //}
 
+    read(fd, &buf, 5);
+
+    while (currentState != STOP_ME)
+    {
+        switch (currentState)
+        {
+            
+            case START:
+
+                int bytes_read = read(fd, &buf, 1);
+                if (bytes_read == 1 && buf[0] == 0x7E){
+                    currentState = FLAG_READ;
+                    printf("FLAG = 0x%02X\n", buf[0]);
+                } else if (bytes_read != 1 || buf[0] != 0x7E){
+                    currentState = START;
+                }
+
+            break;
+
+            case FLAG_READ:
+
+                bytes_read = read(fd, &buf, 1);
+                if (bytes_read == 1 && buf[0] == 0x03){
+                    currentState = A_READ;
+                    printf("A = 0x%02X\n", buf[0]);
+                } else if (bytes_read == 1 && buf[0] == 0x7E){
+                    currentState = FLAG_READ;
+                } else if (bytes_read != 1 || buf[0] != 0x03){
+                    currentState = START;
+                }
+
+            break;
+
+            case A_READ:
+
+                bytes_read = read(fd, &buf, 1);
+                if (bytes_read == 1 && buf[0] == 0x03){
+                    currentState = C_READ;
+                    printf("C = 0x%02X\n", buf[0]);
+                } else if (bytes_read == 1 && buf[0] == 0x7E){
+                    currentState = FLAG_READ;
+                } else if (bytes_read != 1 || buf[0] != 0x03){
+                    currentState = START;
+                }
+            
+            break;
+
+            case C_READ:
+
+                bytes_read = read(fd, &buf, 1);
+                if(bytes_read == 1 && buf[0] == (0x03)^(0x03)){
+                    currentState = BCC_READ;
+                    printf("BCC = 0x%02X\n", buf[0]);
+                } else if (bytes_read == 1 && buf[0] == 0x7E){
+                    currentState = FLAG_READ;
+                } else if (bytes_read != 1 || buf[0] != (0x03)^(0x03)){
+                    currentState = START;
+                }
+
+            break;
+
+            case BCC_READ:
+
+                bytes_read = read(fd, &buf, 1);
+                if (bytes_read == 1 && buf[0] == 0x7E){
+                    currentState = STOP_ME;
+                    printf("FLAG = 0x%02X\n", buf[0]);
+                } else if (bytes_read != 1 || buf[0] != 0x7E){
+                    currentState = START;
+                }
+
+            break;
+
+        }   
+    }
+    
+    
     unsigned char A = 0x01;
     unsigned char C = 0x07;
     unsigned char F = 0x7E;
@@ -114,12 +212,12 @@ int main(int argc, char *argv[])
 
     int teste = write(fd, UA, BUF_SIZE);
 
-    
+    /*
     for(int i=0; i<teste; i++)
     {
         printf("SET = 0x%02X\n", UA[i]);
     }
-    
+    */
 
     // The while() cycle should be changed in order to respect the specifications
     // of the protocol indicated in the Lab guide
