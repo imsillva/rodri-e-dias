@@ -114,8 +114,13 @@ int main(int argc, char *argv[])
     // In non-canonical mode, '\n' does not end the writing.
     // Test this condition by placing a '\n' in the middle of the buffer.
     // The whole buffer must be sent even with the '\n'.
-    unsigned char a =  0x03 ^ 0x03 ;
-    unsigned char buf[5] = {0x7E,0x03,0x03,a,0x7E};
+    unsigned char xor_read;
+    unsigned char BCC1 =  0x03 ^ 0x03 ;
+    unsigned char data[BUF_SIZE] = {0x01,0x02,0x03,0x04,0x05};
+    for( int j = 0 ; j < BUF_SIZE ; j++){
+        xor_read = xor_read ^ data[j];
+    }
+    unsigned char buf[7] = {0x7E,0x03,0x03,BCC1,data,xor_read,0x7E};
     struct sigaction act = {0};
     act.sa_handler = &alarmHandler;
     if (sigaction(SIGALRM, &act, NULL) == -1)
@@ -134,9 +139,6 @@ int main(int argc, char *argv[])
             alarmEnabled = TRUE;
        } 
 
-       if (alarmCount==2){
-        buf[5]=0x7E;
-       }
 
         write(fd, buf, BUF_SIZE);
         unsigned char buf2[BUF_SIZE] = {0};
@@ -164,4 +166,5 @@ int main(int argc, char *argv[])
 
     return 0;
 }
+
 
