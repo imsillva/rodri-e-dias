@@ -3,6 +3,7 @@
 // Modified by: Eduardo Nuno Almeida [enalmeida@fe.up.pt]
 
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +11,6 @@
 #include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
-#include <signal.h>
 
 // Baudrate settings are defined in <asm/termbits.h>, which is
 // included by <termios.h>
@@ -20,14 +20,13 @@
 #define FALSE 0
 #define TRUE 1
 
+#define BUF_SIZE 5
+//alarme 
 int alarmEnabled = FALSE;
 int alarmCount = 0;
 
-#define BUF_SIZE 5
-
-volatile int STOP = FALSE;
-
-
+// Alarm function handler.
+// This function will run whenever the signal SIGALRM is received.
 void alarmHandler(int signal)
 {
     alarmEnabled = FALSE;
@@ -36,21 +35,12 @@ void alarmHandler(int signal)
     printf("Alarm #%d received\n", alarmCount);
 }
 
+volatile int STOP = FALSE;
+
 int main(int argc, char *argv[])
 {
     // Program usage: Uses either COM1 or COM2
     const char *serialPortName = argv[1];
-    int ler;
-    int bytes;
-    unsigned char buf2[BUF_SIZE] = {0};
-
-    struct sigaction act = {0};
-    act.sa_handler = &alarmHandler;
-    if (sigaction(SIGALRM, &act, NULL) == -1)
-    {
-        perror("sigaction");
-        exit(1);
-    }
 
     if (argc < 2)
     {
@@ -92,7 +82,7 @@ int main(int argc, char *argv[])
     // Set input mode (non-canonical, no echo,...)
     newtio.c_lflag = 0;
     newtio.c_cc[VTIME] = 0; // Inter-character timer unused
-    newtio.c_cc[VMIN] =5; // Blocking read until 5 chars received
+    newtio.c_cc[VMIN] = 0;  // Blocking read until 5 chars received
 
     // VTIME e VMIN should be changed in order to protect with a
     // timeout the reception of the following character(s)
@@ -113,63 +103,55 @@ int main(int argc, char *argv[])
 
     printf("New termios structure set\n");
 
-    printf("Alarm configured\n");
-
     // Create string to send
-    unsigned char buf[BUF_SIZE] = {0};
-    unsigned char A = 0x03;
-    unsigned char C = 0x03;
-    unsigned char BCC = A^C;
-    unsigned char F = 0x7E;
-    buf[0] = F;
-    buf[1] = A;
-    buf[2] = C;
-    buf[3] = BCC;
-    buf[4] = F;
+    //unsigned char buf[BUF_SIZE] = {0};
 
-    //for (int i = 0; i < BUF_SIZE; i++)
-    //{
-      //  buf[i] = 'a' + i % 26;
-    //}
+    /*for (int i = 0; i < BUF_SIZE; i++)
+    {
+        buf[i] = 'a' + i % 26;
+    }*/
 
     // In non-canonical mode, '\n' does not end the writing.
     // Test this condition by placing a '\n' in the middle of the buffer.
     // The whole buffer must be sent even with the '\n'.
-    //buf[5] = '\n';
-
-
-    while (alarmCount <4)
-    {   
-        bytes = write(fd, buf, BUF_SIZE);
-
-        if (alarmEnabled == FALSE)
-        {   
-            alarmEnabled = TRUE;
-            alarm(3);
-             // Set alarm to be triggered in 3s
-        }
-        
-        
-        ler = read(fd,buf2,BUF_SIZE);
-
-        if (ler != -1){
-            printf("Bytes lidos\n");
-            for ( int i = 0 ; i < ler;i++){
-                printf("var = 0x%02X\n", buf2[i]);
-            }
-            break;
-        }
-        
-    
+    unsigned char a =  0x03 ^ 0x03 ;
+    unsigned char buf[5] = {0x7E,0x03,0x03,a,0x7E};
+    struct sigaction act = {0};
+    act.sa_handler = &alarmHandler;
+    if (sigaction(SIGALRM, &act, NULL) == -1)
+    {
+        perror("sigaction");
+        exit(1);
     }
 
-    printf("Ending program\n");
+    printf("Alarm configured\n");
 
-    // fflush(stdout);
-    
+    while (alarmCount < 5)
+    {
+        if (alarmEnabled == FALSE)
+        {
+            alarm(3); // Set alarm to be triggered in 3s
+            alarmEnabled = TRUE;
+       } 
 
+       if (alarmCount==2){
+        buf[5]=0x7E;
+       }
+
+        write(fd, buf, BUF_SIZE);
+        unsigned char buf2[BUF_SIZE] = {0};
+        int bytesa = read(fd, buf2, 5);
+
+        if(bytesa == 5){
+            for (int i=0; i<5; i++){ printf("var = 0x%02X\n", buf2[i]);}
+            break;
+        }
+    }
+
+    //copiar maquina estados para receber o  UA
     // Wait until all bytes have been written to the serial port
     sleep(1);
+    
 
     // Restore the old port settings
     if (tcsetattr(fd, TCSANOW, &oldtio) == -1)
@@ -182,3 +164,4 @@ int main(int argc, char *argv[])
 
     return 0;
 }
+
