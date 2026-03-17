@@ -87,7 +87,7 @@ int main(int argc, char *argv[])
     // Set input mode (non-canonical, no echo,...)
     newtio.c_lflag = 0;
     newtio.c_cc[VTIME] = 0; // Inter-character timer unused
-    newtio.c_cc[VMIN] = 1;  // Blocking read until 5 chars received
+    newtio.c_cc[VMIN] = 10;  // Blocking read until 5 chars received
 
     // VTIME e VMIN should be changed in order to protect with a
     // timeout the reception of the following character(s)
@@ -109,7 +109,7 @@ int main(int argc, char *argv[])
     printf("New termios structure set\n");
 
     // Loop for input
-    unsigned char buf[BUF_SIZE + 1] = {0}; // +1: Save space for the final '\0' char
+    //unsigned char buf[BUF_SIZE + 1] = {0}; // +1: Save space for the final '\0' char
 
     //while (STOP == FALSE)
     //{
@@ -126,8 +126,8 @@ int main(int argc, char *argv[])
         //if (buf[0] == 'z')
             //STOP = TRUE;
     //}
-
-    read(fd, &buf, 5);
+    unsigned char buf = 0;
+    int bytes_read;
 
     while (currentState != STOP_ME)
     {
@@ -136,11 +136,12 @@ int main(int argc, char *argv[])
             
             case START:
 
-                int bytes_read = read(fd, &buf, 1);
-                if (bytes_read == 1 && buf[0] == 0x7E){
+                printf("banana");
+                bytes_read = read(fd, &buf, 1);
+                if (bytes_read == 1 && buf == 0x7E){
                     currentState = FLAG_READ;
-                    printf("FLAG = 0x%02X\n", buf[0]);
-                } else if (bytes_read != 1 || buf[0] != 0x7E){
+                    printf("FLAG = 0x%02X\n", buf);
+                } else if (bytes_read != 1 || buf != 0x7E){
                     currentState = START;
                 }
 
@@ -148,13 +149,14 @@ int main(int argc, char *argv[])
 
             case FLAG_READ:
 
+                printf("banana");
                 bytes_read = read(fd, &buf, 1);
-                if (bytes_read == 1 && buf[0] == 0x03){
+                if (bytes_read == 1 && buf == 0x03){
                     currentState = A_READ;
-                    printf("A = 0x%02X\n", buf[0]);
-                } else if (bytes_read == 1 && buf[0] == 0x7E){
+                    printf("A = 0x%02X\n", buf);
+                } else if (bytes_read == 1 && buf == 0x7E){
                     currentState = FLAG_READ;
-                } else if (bytes_read != 1 || buf[0] != 0x03){
+                } else if (bytes_read != 1 || buf != 0x03){
                     currentState = START;
                 }
 
@@ -162,13 +164,14 @@ int main(int argc, char *argv[])
 
             case A_READ:
 
+                printf("banana");
                 bytes_read = read(fd, &buf, 1);
-                if (bytes_read == 1 && buf[0] == 0x03){
+                if (bytes_read == 1 && buf == 0x03){
                     currentState = C_READ;
-                    printf("C = 0x%02X\n", buf[0]);
-                } else if (bytes_read == 1 && buf[0] == 0x7E){
+                    printf("C = 0x%02X\n", buf);
+                } else if (bytes_read == 1 && buf == 0x7E){
                     currentState = FLAG_READ;
-                } else if (bytes_read != 1 || buf[0] != 0x03){
+                } else if (bytes_read != 1 || buf != 0x03){
                     currentState = START;
                 }
             
@@ -177,12 +180,12 @@ int main(int argc, char *argv[])
             case C_READ:
 
                 bytes_read = read(fd, &buf, 1);
-                if(bytes_read == 1 && buf[0] == (0x03)^(0x03)){
+                if(bytes_read == 1 && buf == (0x03)^(0x03)){
                     currentState = BCC_READ;
-                    printf("BCC = 0x%02X\n", buf[0]);
-                } else if (bytes_read == 1 && buf[0] == 0x7E){
+                    printf("BCC = 0x%02X\n", buf);
+                } else if (bytes_read == 1 && buf == 0x7E){
                     currentState = FLAG_READ;
-                } else if (bytes_read != 1 || buf[0] != (0x03)^(0x03)){
+                } else if (bytes_read != 1 || buf != (0x03)^(0x03)){
                     currentState = START;
                 }
 
@@ -191,10 +194,10 @@ int main(int argc, char *argv[])
             case BCC_READ:
 
                 bytes_read = read(fd, &buf, 1);
-                if (bytes_read == 1 && buf[0] == 0x7E){
+                if (bytes_read == 1 && buf == 0x7E){
                     currentState = STOP_ME;
-                    printf("FLAG = 0x%02X\n", buf[0]);
-                } else if (bytes_read != 1 || buf[0] != 0x7E){
+                    printf("FLAG = 0x%02X\n", buf);
+                } else if (bytes_read != 1 || buf != 0x7E){
                     currentState = START;
                 }
 
