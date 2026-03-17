@@ -218,7 +218,7 @@ int main(int argc, char *argv[])
                         xor_read = xor_read ^ data[j];
                     }
                     printf("BCC2 lido: 0x%02X\n", BCC2_read);
-                    printf("BCC2 lido: 0x%02X\n", xor_read);
+                    printf("BCC2 calculado: 0x%02X\n", xor_read);
                     currentState = STOP_ME;
 
                 } else {
