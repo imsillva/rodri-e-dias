@@ -28,6 +28,12 @@ typedef enum {
 	CONTADOR,
 } stateNames2;
 
+typedef enum {
+	AZUL,
+	VERDE,
+	INI,
+} stateNames3;
+
 
 // Funções
 void initME();
@@ -35,9 +41,11 @@ void initME();
 // Estado atual da máquina
 stateNames1 currentState1;
 stateNames2 currentState2;
+stateNames3 currentState3;
 u_int64_t tempo = 0;
 int count = 0;
 int st_prev = 0;
+int ss_prev = 0;
 
 
 // Inicializa a ME
@@ -47,6 +55,7 @@ void init_ME()
 	// Estado inicial
 	currentState1 = STOP1;
 	currentState2 = STOP2;
+	currentState3 = INI;
 
 	
 	// Saídas
@@ -59,6 +68,7 @@ void init_ME()
 
 	count = 0;
 	st_prev = 0;
+	ss_prev = 0;
 
 }
 
@@ -82,41 +92,46 @@ int main() {
 		int st_fall = (ST == 0 && st_prev == 1);
 		st_prev = ST;
 
-		// Transição entre estados
+		int ss_fall = (SS == 0 && ss_prev == 1);
+		ss_prev = SS;
+
+		//Máquina 1 (Primeiro tapete)
 		switch (currentState1) 
 		{
 		
 			
 			case STOP1:
 					
-				// Testa transição STOP -> MOV
 				if (BA == 1 && SS == 0) {
 					
-					// Próximo estado
 					currentState1 = MOV1;
-					
-					#ifdef DEBUG
-					printf ("\n*** Tapete em movimento ***\n");
-					#endif
+
 				}
 			
 				break;
 
 			case MOV1 :
-				
-				if (SC == 1 && SS == 1) {
 
-					currentState1 = WAIT1_BOX;
-					break;
+				if(ss_fall == 1){
 
-				}
-
-				if (SS == 1) {
+					if(currentState3 == INI) {
 					
-					currentState1 = WAIT1;
-					#ifdef DEBUG
-					printf ("\n*** Tapete parado ***\n");
-					#endif
+						currentState1 = WAIT1;
+
+					}
+
+					if(((SV == 4) && (currentState3 == AZUL)) || ((SV == 1) && (currentState3 == VERDE))) {
+
+						currentState1 = EMPURRA;
+
+					}
+
+					if(((SV == 4) && (currentState3 == VERDE)) || ((SV == 1) && (currentState3 == AZUL))) {
+
+						currentState1 = PRESS_DOWN;
+
+					}
+
 				}
 			
 					
@@ -127,14 +142,16 @@ int main() {
 				if  (SS == 0) 
 				{
 
-					if (BSA == 0 && BSV == 0) {
-            			break;
-        			}
+					if(((SV == 4) && (currentState3 == AZUL)) || ((SV == 1) && (currentState3 == VERDE))) {
 
-					if ( ( SV == 4 && BSV == 1 && BSA == 0) || (SV == 1 && BSA == 1 && BSV == 0) ) {
-						currentState1 = PRESS_DOWN;
-					} else if (( SV == 4 && BSV == 0) || (SV == 1 && BSA == 0) ){
 						currentState1 = EMPURRA;
+
+					}
+
+					if(((SV == 4) && (currentState3 == VERDE)) || ((SV == 1) && (currentState3 == AZUL))) {
+
+						currentState1 = PRESS_DOWN;
+
 					}
 				
 				}
@@ -144,7 +161,7 @@ int main() {
 
 			case PRESS_DOWN:
 				
-				if ( SZ == 0 ) {
+				if (SZ == 0) {
 
 					tempo = get_time();
 					currentState1 = PRESS_WAIT;
@@ -155,7 +172,7 @@ int main() {
 
 			case PRESS_WAIT:
 				
-				if ( get_time() - tempo  >= 1500 ) {
+				if (get_time() - tempo  >= 1500) {
 
 					currentState1 = PRESS_UP;
 
@@ -165,11 +182,12 @@ int main() {
 
 			case PRESS_UP:
 
-				if ( SZ == 0 ) {
+				if (SZ == 0) {
 
-					if (SC == 1) {
+					if (currentState2 == MOV2_IN) {
 
 						currentState1 = WAIT1_BOX;
+
 					} else {
 
 						currentState1 = MOV1;
@@ -202,7 +220,7 @@ int main() {
 
 			case WAIT1_BOX:
 
-				if (SC == 0) {
+				if (currentState2 == CONTADOR) {
 
 					currentState1 = MOV1;
 
@@ -210,8 +228,10 @@ int main() {
 			
 			break;
 				
-		} //end case
+		}
+		// end case
 
+		//Máquina 2 (Segundo tapete)
 		switch (currentState2)
 		{
 			case STOP2:
@@ -244,7 +264,7 @@ int main() {
 
 				}
 
-				if( count >= 3 && ST == 0) {
+				if(count >= 3 && ST == 0) {
 
 					CC++;
 					currentState2 = MOV2_OUT;
@@ -255,7 +275,7 @@ int main() {
 
 			case MOV2_OUT:
 
-				if( SC == 1 ) {
+				if(SC == 1) {
 
 					currentState2 = MOV2_IN;
 
@@ -264,21 +284,64 @@ int main() {
 			break;
 
 		}
+		// end case
+
+		//Máquina 3 (controlo das luzes)
+		switch (currentState3)
+		{
+			
+			case AZUL:
+
+				if ((BSA == 0) && (BSV == 0)) {
+
+					currentState3 = INI;
+
+				}
+
+			break;
+
+			case VERDE:
+
+				if ((BSA == 0) && (BSV == 0)) {
+
+					currentState3 = INI;
+
+				}
+
+			break;
+
+			case INI:
+
+				if (BSA == 1) {
+
+					currentState3 = AZUL;
+
+				} else if (BSV == 1) {
+
+					currentState3 = VERDE;
+
+				}
+
+			break;
+
+		}
+		// end case
 		
 
 		// Atualiza saídas
 
-		T1 = (currentState1 == MOV1)  || (currentState1 == WAIT1 && SS == 1);
-		E1 = T1;
-		LP = (currentState1 == STOP1);
-		LV = (BSV == 1);
-		LA = (BSA == 1);
+		T1 = (currentState1 == MOV1);
+		E1 = (currentState1 != STOP1);
+		LP = (currentState1 == STOP1) && (currentState2 == STOP2);
 		MZ = (currentState1 == PRESS_DOWN || currentState1 == PRESS_WAIT);
 		IP = (currentState1 == EMPURRA);
 
 		T2 = (currentState2 == MOV2_IN) || (currentState2 == MOV2_OUT);
-		E2 = T2;
+		E2 = (currentState2 != STOP2);
 		
+		LV = (currentState3 == VERDE);
+		LA = (currentState3 == AZUL);
+
 		//Escrita nas saídas
 		write_outputs();
 		
