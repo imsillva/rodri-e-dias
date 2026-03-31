@@ -146,8 +146,9 @@ int main(int argc, char *argv[])
         {
             alarm(3); // Set alarm to be triggered in 3s
             alarmEnabled = TRUE;
-            write(fd, buf, sizeof(buf));
+            
        } 
+        write(fd, buf, sizeof(buf));
         unsigned char buf2[5] = {0};
         int bytesa = read(fd, buf2, 5);
 
@@ -173,5 +174,3 @@ int main(int argc, char *argv[])
 
     return 0;
 }
-
-
