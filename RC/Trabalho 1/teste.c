@@ -2,8 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -17,9 +17,8 @@
 #define SU_FRAME_SIZE 5
 
 #define FLAG   0x7E
-#define A_TX   0x03                  // comandos do transmissor
-#define A_RX   0x01                  // respostas do recetor
-// Se o teu emissor estiver à espera de 0x03 nas respostas, troca para 0x03.
+#define A_TX   0x03
+#define A_RX   0x01
 
 #define C_SET  0x03
 #define C_UA   0x07
@@ -44,7 +43,8 @@ typedef enum {
     CONNECTED
 } conn_state_t;
 
-static void send_supervision(int fd, unsigned char A, unsigned char C) {
+static void send_supervision(int fd, unsigned char A, unsigned char C)
+{
     unsigned char frame[SU_FRAME_SIZE];
     frame[0] = FLAG;
     frame[1] = A;
@@ -52,12 +52,12 @@ static void send_supervision(int fd, unsigned char A, unsigned char C) {
     frame[3] = A ^ C;
     frame[4] = FLAG;
 
-    if (write(fd, frame, SU_FRAME_SIZE) < 0) {
+    if (write(fd, frame, SU_FRAME_SIZE) < 0)
         perror("write");
-    }
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
     if (argc < 2) {
         printf("Usage: %s <SerialPort>\n"
                "Example: %s /dev/ttyS1\n", argv[0], argv[0]);
@@ -84,7 +84,7 @@ int main(int argc, char *argv[]) {
     newtio.c_oflag = 0;
     newtio.c_lflag = 0;
     newtio.c_cc[VTIME] = 0;
-    newtio.c_cc[VMIN]  = 1;   // importante: 1 byte de cada vez
+    newtio.c_cc[VMIN] = 1;
 
     tcflush(fd, TCIOFLUSH);
     if (tcsetattr(fd, TCSANOW, &newtio) == -1) {
@@ -99,7 +99,7 @@ int main(int argc, char *argv[]) {
 
     unsigned char byte = 0;
     unsigned char A = 0, C = 0;
-    unsigned char data[MAX_DATA_SIZE];
+    unsigned char data[MAX_DATA_SIZE] = {0};
     int data_index = 0;
     int expectedSeq = 0;
 
@@ -109,20 +109,20 @@ int main(int argc, char *argv[]) {
             perror("read");
             break;
         }
-        if (bytes_read == 0) continue;
+        if (bytes_read == 0)
+            continue;
 
         printf("byte = 0x%02X\n", byte);
 
         switch (currentState) {
             case START:
-                if (byte == FLAG) {
+                if (byte == FLAG)
                     currentState = FLAG_RCV;
-                }
                 break;
 
             case FLAG_RCV:
                 if (byte == FLAG) {
-                    // mantém
+                    /* keep sync */
                 } else if (byte == A_TX) {
                     A = byte;
                     currentState = A_RCV;
@@ -137,8 +137,7 @@ int main(int argc, char *argv[]) {
                 } else if (connState == DISCONNECTED && byte == C_SET) {
                     C = byte;
                     currentState = C_RCV;
-                } else if (connState == CONNECTED &&
-                           (byte == C_I0 || byte == C_I1)) {
+                } else if (connState == CONNECTED && (byte == C_I0 || byte == C_I1)) {
                     C = byte;
                     currentState = C_RCV;
                 } else {
@@ -158,21 +157,25 @@ int main(int argc, char *argv[]) {
 
             case BCC1_RCV:
                 if (byte == FLAG) {
-                    // trama sem campo de dados
                     if (connState == DISCONNECTED && C == C_SET) {
                         printf("SET recebido com sucesso\n");
                         send_supervision(fd, A_RX, C_UA);
                         printf("UA enviada\n");
                         connState = CONNECTED;
-                        printf("Ligação estabelecida. À espera de I-frames...\n");
+                        printf("Ligacao estabelecida. A espera de I-frames...\n");
                     }
                     currentState = START;
                     data_index = 0;
                 } else {
-                    // primeiro byte de dados
-                    data[0] = byte;
-                    data_index = 1;
-                    currentState = DATA_RCV;
+                    if (connState != CONNECTED) {
+                        printf("Erro: dados recebidos antes da ligacao estar estabelecida\n");
+                        currentState = START;
+                        data_index = 0;
+                    } else {
+                        data[0] = byte;
+                        data_index = 1;
+                        currentState = DATA_RCV;
+                    }
                 }
                 break;
 
@@ -187,7 +190,6 @@ int main(int argc, char *argv[]) {
 
                     unsigned char bcc2_read = data[data_index - 1];
                     unsigned char bcc2_calc = 0x00;
-
                     for (int i = 0; i < data_index - 1; i++) {
                         printf("data[%d] = 0x%02X\n", i, data[i]);
                         bcc2_calc ^= data[i];
@@ -196,11 +198,11 @@ int main(int argc, char *argv[]) {
                     printf("BCC2 lido      = 0x%02X\n", bcc2_read);
                     printf("BCC2 calculado = 0x%02X\n", bcc2_calc);
 
-                    int frameSeq = (C == C_I0) ? 0 : 1;
+                    int frameSeq = (C == C_I1) ? 1 : 0;
 
                     if (bcc2_read == bcc2_calc) {
                         if (frameSeq == expectedSeq) {
-                            printf("I-frame %d válida\n", frameSeq);
+                            printf("I-frame %d valida\n", frameSeq);
                             expectedSeq = 1 - expectedSeq;
 
                             if (expectedSeq == 0)
@@ -217,7 +219,7 @@ int main(int argc, char *argv[]) {
                                 send_supervision(fd, A_RX, C_RR1);
                         }
                     } else {
-                        printf("Erro no BCC2 — trama rejeitada\n");
+                        printf("Erro no BCC2 - trama rejeitada\n");
 
                         if (expectedSeq == 0)
                             send_supervision(fd, A_RX, C_REJ0);
