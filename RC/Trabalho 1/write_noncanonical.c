@@ -115,7 +115,7 @@ int main(int argc, char *argv[])
     // Test this condition by placing a '\n' in the middle of the buffer.
     // The whole buffer must be sent even with the '\n'.
     unsigned char BCC1 =  0x03 ^ 0x03;
-    unsigned char buf[BUF_SIZE + 1] = {0};
+    unsigned char buf[BUF_SIZE] = {0};
     buf[0] = 0x7E;
     buf[1] = 0x03;
     buf[2] = 0x03;
