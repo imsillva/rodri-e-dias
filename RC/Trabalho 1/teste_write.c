@@ -18,7 +18,7 @@
 
 #define FLAG   0x7E
 #define A_TX   0x03
-#define A_RX   0x01
+#define A_RX   0x03
 #define C_SET  0x03
 #define C_UA   0x07
 #define C_I0   0x00
@@ -121,6 +121,7 @@ static int read_supervision_frame(int fd, unsigned char expectedA,
             continue;
 
         printf("RX ctrl byte = 0x%02X\n", byte);
+        fflush(stdout);
 
         switch (state) {
             case START:
@@ -250,6 +251,7 @@ int main(int argc, char *argv[])
     while (!connected && alarmCount < MAX_RETRIES) {
         if (!alarmEnabled) {
             printf("Sending SET...\n");
+            fflush(stdout);
             send_supervision(fd, A_TX, C_SET);
             alarm(TIMEOUT_SECS);
             alarmEnabled = TRUE;
@@ -261,6 +263,7 @@ int main(int argc, char *argv[])
             alarmEnabled = FALSE;
             connected = TRUE;
             printf("UA received. Connection established.\n");
+            fflush(stdout);
         } else if (res < 0) {
             break;
         }
@@ -268,6 +271,7 @@ int main(int argc, char *argv[])
 
     if (!connected) {
         printf("Failed to establish connection\n");
+            fflush(stdout);
         tcsetattr(fd, TCSANOW, &oldtio);
         close(fd);
         return 1;
@@ -284,6 +288,7 @@ int main(int argc, char *argv[])
     while (!done && alarmCount < MAX_RETRIES) {
         if (!alarmEnabled) {
             printf("Sending I0 frame...\n");
+            fflush(stdout);
             send_iframe(fd, payload, (int)sizeof(payload), 0);
             alarm(TIMEOUT_SECS);
             alarmEnabled = TRUE;
@@ -296,9 +301,11 @@ int main(int argc, char *argv[])
 
             if (ackC == C_RR1) {
                 printf("RR1 received. Frame accepted.\n");
+            fflush(stdout);
                 done = TRUE;
             } else if (ackC == C_REJ0) {
                 printf("REJ0 received. Retransmitting...\n");
+            fflush(stdout);
                 alarmEnabled = FALSE;
             }
         } else if (res < 0) {
