@@ -48,29 +48,21 @@
 
 #define _POSIX_SOURCE 1 // POSIX compliant source
 
-
-
-
-
+typedef enum {
+    START,
+    FLAG_RCV,
+    A_RCV,
+    C_RCV,
+    //BCC_OK,
+    DATA_READ,
+    END
+} state;
 #define FALSE 0
-
-
 #define TRUE 1
-
-
-
-
-
 #define BUF_SIZE 11
 
 
-
-
-
 volatile int STOP = FALSE;
-
-
-
 
 
 int main(int argc, char *argv[])
@@ -266,21 +258,142 @@ int main(int argc, char *argv[])
 
     // Loop for input
     unsigned char buf[BUF_SIZE] = {0}; // +1: Save space for the final '\0' char
-    //while (STOP == FALSE)
-    //{
+
+    int bytes_read;
+    unsigned char data[BUF_SIZE] = {0};
+    int i = 0;
+    unsigned char BCC2_read;
+    unsigned char xor_read;
 
 
-        // Returns after 5 chars have been input
-        int bytes = read(fd, buf, BUF_SIZE);
-        //buf[bytes] = '\0'; // Set end of string to '\0', so we can printf
-        //printf(":%s:%d\n", buf, bytes);
-        for(int i=0; i<bytes; i++)
-        {
-            printf("SET = 0x%02X\n", buf[i]);
+    state currentstate = START;
+    while (STOP==FALSE)
+    {
+        read(fd, buf, 1);
+        printf("var = 0x%02X\n", (unsigned int)(buf[0] & 0xFF));
+
+        switch(currentstate){
+            case START:
+                if(buf[0]==0x7E){
+                currentstate = FLAG_RCV;
+                }
+                break;
+            case FLAG_RCV:
+                if(buf[0]==0x03){
+                    currentstate = A_RCV;
+                }
+                break;
+            case A_RCV:
+                if(buf[0]==0x03){
+                    currentstate = C_RCV;
+                }
+            break;
+
+            case C_RCV:
+                if(buf[0]==(0x03 ^ 0x03)){
+                currentstate = DATA_READ;
+                printf("to bcc ok\n");
+                }
+            break;
+            
+            /*
+            case DATA_READ:
+
+                if(buf[0] == 0x7E) {
+
+                    //i--;
+                    BCC2_read = data[i];
+                    xor_read = data[0];
+
+                    for(int j = 0; j<i-1; j++){
+                        printf("valor da data: 0x%02X\n", data[j]);
+                        xor_read = xor_read ^ data[j];
+
+                    }
+                    printf("BCC2 lido: 0x%02X\n", BCC2_read);
+                    printf("BCC2 calculado: 0x%02X\n", xor_read);
+                    currentstate = END;
+                    STOP = TRUE;
+                    printf("end\n");
+
+
+                } else {
+                    data[i] = buf[0];
+                    i++;
+                }
+
+            break;
+            */
+
+            case DATA_READ:
+
+                if (buf[0] == 0x7E) {
+
+                // Verifica se há pelo menos 1 byte de dados + 1 byte de BCC2
+                if (i < 1) {
+                    printf("Frame vazio ou inválido\n");
+                    currentstate = START;
+                    i = 0;
+                break;
+                }
+
+                // Último byte recebido antes do FLAG é o BCC2
+                BCC2_read = data[i - 1];
+
+                // Calcular XOR dos dados (exclui o BCC2)
+                xor_read = 0x00;
+                for (int j = 0; j < i - 1; j++) {
+                    printf("valor da data[%d]: 0x%02X\n", j, data[j]);
+                    xor_read ^= data[j];
+                }
+
+                printf("BCC2 lido: 0x%02X\n", BCC2_read);
+                printf("BCC2 calculado: 0x%02X\n", xor_read);
+
+                // Verificação do BCC2
+                if (xor_read == BCC2_read) {
+                    printf("BCC2 OK\n");
+                    currentstate = END;
+                } else {
+                    printf("BCC2 ERROR\n");
+                    currentstate = START;  // ou estado de erro, dependendo do teu protocolo
+                }
+
+                STOP = TRUE;
+                i = 0; // reset buffer para próximo frame
+                printf("end\n");
+
+                } else {
+
+                    // Guardar byte recebido
+                    data[i] = buf[0];
+                    i++;
+
+                    // Proteção contra overflow (IMPORTANTE)
+                    /*if (i >= MAX_DATA_SIZE) {
+                        printf("Overflow de buffer\n");
+                        currentstate = START;
+                        i = 0;
+                    }
+                    */
+                }
+
+            break;
+
+            /*
+            case BCC_OK:
+                if(buf[0]==0x7E){
+                    currentstate = END;
+                    STOP=TRUE;
+                    printf("end\n");
+                }
+            break;
+            */
+
+            case END:
+                break;
+            }
         }
-        //if (buf[0] == 'z')
-            //STOP = TRUE;
-    //}
     unsigned char A = 0x01;
     unsigned char C = 0x07;
     unsigned char F = 0x7E;
