@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,15 +15,26 @@
 #define FALSE 0
 #define TRUE 1
 
-#define MAX_DATA_SIZE 256
+#define MAX_DATA_SIZE 2048
 #define SU_FRAME_SIZE 5
 
-#define FLAG   0x7E
-#define A_TX   0x03
-#define A_RX   0x03
+#define FLAG    0x7E
+#define ESC     0x7D
+#define ESC_XOR 0x20
+
+/*
+ * According to the lab PDF:
+ * - A = 0x03 in commands sent by the Transmitter and replies sent by the Receiver
+ * - A = 0x01 in commands sent by the Receiver and replies sent by the Transmitter
+ * For this test receiver we only need to receive Tx commands and send Rx replies,
+ * so both directions below use 0x03.
+ */
+#define A_TX_CMD   0x03
+#define A_RX_REPLY 0x03
 
 #define C_SET  0x03
 #define C_UA   0x07
+#define C_DISC 0x0B
 #define C_I0   0x00
 #define C_I1   0x40
 #define C_RR0  0x05
@@ -34,8 +47,9 @@ typedef enum {
     FLAG_RCV,
     A_RCV,
     C_RCV,
-    BCC1_RCV,
-    DATA_RCV
+    BCC1_OK,
+    DATA_RCV,
+    ESC_RCV
 } state_t;
 
 typedef enum {
@@ -43,7 +57,52 @@ typedef enum {
     CONNECTED
 } conn_state_t;
 
-static void send_supervision(int fd, unsigned char A, unsigned char C)
+static int read_byte(int fd, unsigned char *byte)
+{
+    int res = read(fd, byte, 1);
+
+    if (res < 0) {
+        if (errno == EINTR)
+            return 0;
+        perror("read");
+        return -1;
+    }
+
+    return res; /* 0 => no byte available now, 1 => got one byte */
+}
+
+static int configure_port(int fd, struct termios *oldtio)
+{
+    struct termios newtio;
+
+    if (tcgetattr(fd, oldtio) == -1) {
+        perror("tcgetattr");
+        return -1;
+    }
+
+    memset(&newtio, 0, sizeof(newtio));
+    newtio.c_cflag = BAUDRATE | CS8 | CLOCAL | CREAD;
+    newtio.c_iflag = IGNPAR;
+    newtio.c_oflag = 0;
+    newtio.c_lflag = 0;
+
+    /*
+     * Receive asynchronously, one byte at a time, without blocking forever.
+     * VTIME is in tenths of a second.
+     */
+    newtio.c_cc[VTIME] = 1;
+    newtio.c_cc[VMIN] = 0;
+
+    tcflush(fd, TCIOFLUSH);
+    if (tcsetattr(fd, TCSANOW, &newtio) == -1) {
+        perror("tcsetattr");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int send_supervision(int fd, unsigned char A, unsigned char C)
 {
     unsigned char frame[SU_FRAME_SIZE];
     frame[0] = FLAG;
@@ -52,8 +111,16 @@ static void send_supervision(int fd, unsigned char A, unsigned char C)
     frame[3] = A ^ C;
     frame[4] = FLAG;
 
-    if (write(fd, frame, SU_FRAME_SIZE) < 0)
+    int written = write(fd, frame, SU_FRAME_SIZE);
+    if (written < 0) {
         perror("write");
+        return -1;
+    }
+
+    printf("TX S-frame: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n",
+           frame[0], frame[1], frame[2], frame[3], frame[4]);
+    fflush(stdout);
+    return written;
 }
 
 int main(int argc, char *argv[])
@@ -61,124 +128,127 @@ int main(int argc, char *argv[])
     if (argc < 2) {
         printf("Usage: %s <SerialPort>\n"
                "Example: %s /dev/ttyS1\n", argv[0], argv[0]);
-        exit(1);
+        return 1;
     }
 
     const char *serialPortName = argv[1];
-
     int fd = open(serialPortName, O_RDWR | O_NOCTTY);
     if (fd < 0) {
         perror(serialPortName);
-        exit(-1);
+        return 1;
     }
 
-    struct termios oldtio, newtio;
-    if (tcgetattr(fd, &oldtio) == -1) {
-        perror("tcgetattr");
-        exit(-1);
+    struct termios oldtio;
+    if (configure_port(fd, &oldtio) < 0) {
+        close(fd);
+        return 1;
     }
 
-    memset(&newtio, 0, sizeof(newtio));
-    newtio.c_cflag = BAUDRATE | CS8 | CLOCAL | CREAD;
-    newtio.c_iflag = IGNPAR;
-    newtio.c_oflag = 0;
-    newtio.c_lflag = 0;
-    newtio.c_cc[VTIME] = 0;
-    newtio.c_cc[VMIN] = 1;
+    printf("Receiver ready on %s\n", serialPortName);
+    fflush(stdout);
 
-    tcflush(fd, TCIOFLUSH);
-    if (tcsetattr(fd, TCSANOW, &newtio) == -1) {
-        perror("tcsetattr");
-        exit(-1);
-    }
-
-    printf("New termios structure set\n");
-
-    state_t currentState = START;
+    state_t state = START;
     conn_state_t connState = DISCONNECTED;
 
     unsigned char byte = 0;
-    unsigned char A = 0, C = 0;
-    unsigned char data[MAX_DATA_SIZE] = {0};
+    unsigned char A = 0;
+    unsigned char C = 0;
+
+    unsigned char data[MAX_DATA_SIZE];
     int data_index = 0;
     int expectedSeq = 0;
 
     while (1) {
-        int bytes_read = read(fd, &byte, 1);
-        if (bytes_read < 0) {
-            perror("read");
+        int res = read_byte(fd, &byte);
+        if (res < 0)
             break;
-        }
-        if (bytes_read == 0)
+        if (res == 0)
             continue;
 
-        printf("byte = 0x%02X\n", byte);
+        printf("RX byte = 0x%02X\n", byte);
         fflush(stdout);
 
-        switch (currentState) {
+        switch (state) {
             case START:
                 if (byte == FLAG)
-                    currentState = FLAG_RCV;
+                    state = FLAG_RCV;
                 break;
 
             case FLAG_RCV:
                 if (byte == FLAG) {
-                    /* keep sync */
-                } else if (byte == A_TX) {
+                    /* keep synchronization */
+                } else if (byte == A_TX_CMD) {
                     A = byte;
-                    currentState = A_RCV;
+                    state = A_RCV;
                 } else {
-                    currentState = START;
+                    printf("Ignored after FLAG: 0x%02X\n", byte);
+                    fflush(stdout);
+                    state = START;
                 }
                 break;
 
             case A_RCV:
                 if (byte == FLAG) {
-                    currentState = FLAG_RCV;
+                    state = FLAG_RCV;
                 } else if (connState == DISCONNECTED && byte == C_SET) {
                     C = byte;
-                    currentState = C_RCV;
-                } else if (connState == CONNECTED && byte == C_SET) {
+                    state = C_RCV;
+                } else if (connState == CONNECTED && (byte == C_SET || byte == C_I0 || byte == C_I1 || byte == C_DISC)) {
                     C = byte;
-                    currentState = C_RCV;
-                } else if (connState == CONNECTED && (byte == C_I0 || byte == C_I1)) {
-                    C = byte;
-                    currentState = C_RCV;
+                    state = C_RCV;
                 } else {
-                    currentState = START;
+                    printf("Unexpected control byte 0x%02X in state A_RCV\n", byte);
+                    fflush(stdout);
+                    state = START;
                 }
                 break;
 
             case C_RCV:
                 if (byte == FLAG) {
-                    currentState = FLAG_RCV;
-                } else if (byte == (A ^ C)) {
-                    currentState = BCC1_RCV;
+                    state = FLAG_RCV;
+                } else if (byte == (unsigned char)(A ^ C)) {
+                    state = BCC1_OK;
                 } else {
-                    currentState = START;
+                    printf("BCC1 error: got 0x%02X expected 0x%02X\n", byte, (unsigned char)(A ^ C));
+                    fflush(stdout);
+                    state = START;
                 }
                 break;
 
-            case BCC1_RCV:
+            case BCC1_OK:
                 if (byte == FLAG) {
                     if (C == C_SET) {
-                        printf("SET recebido com sucesso\n");
-                        send_supervision(fd, A_RX, C_UA);
-                        printf("UA enviada\n");
+                        printf("Valid SET received\n");
+                        fflush(stdout);
+                        if (send_supervision(fd, A_RX_REPLY, C_UA) < 0)
+                            goto cleanup;
                         connState = CONNECTED;
-                        printf("Ligacao estabelecida. A espera de I-frames...\n");
+                        printf("UA sent. Connection established.\n");
+                        fflush(stdout);
+                    } else if (C == C_DISC) {
+                        printf("DISC received (ignored in this simple test receiver)\n");
+                        fflush(stdout);
+                    } else {
+                        printf("Frame ended right after BCC1 but control 0x%02X expects data or different handling\n", C);
+                        fflush(stdout);
                     }
-                    currentState = START;
+                    state = START;
                     data_index = 0;
                 } else {
                     if (connState != CONNECTED) {
-                        printf("Erro: dados recebidos antes da ligacao estar estabelecida\n");
-                        currentState = START;
+                        printf("Data received before connection establishment. Ignoring frame.\n");
+                        fflush(stdout);
+                        state = START;
                         data_index = 0;
-                    } else {
+                    } else if (C == C_I0 || C == C_I1) {
                         data[0] = byte;
                         data_index = 1;
-                        currentState = DATA_RCV;
+                        state = (byte == ESC) ? ESC_RCV : DATA_RCV;
+                    } else {
+                        printf("Unexpected data after BCC1 for control 0x%02X\n", C);
+                        fflush(stdout);
+                        state = START;
+                        data_index = 0;
                     }
                 }
                 break;
@@ -186,73 +256,107 @@ int main(int argc, char *argv[])
             case DATA_RCV:
                 if (byte == FLAG) {
                     if (data_index < 1) {
-                        printf("Erro: trama demasiado curta\n");
-                        currentState = START;
+                        printf("Invalid I-frame: missing BCC2\n");
+                        fflush(stdout);
+                        state = START;
                         data_index = 0;
                         break;
                     }
 
                     unsigned char bcc2_read = data[data_index - 1];
                     unsigned char bcc2_calc = 0x00;
-                    for (int i = 0; i < data_index - 1; i++) {
-                        printf("data[%d] = 0x%02X\n", i, data[i]);
+                    for (int i = 0; i < data_index - 1; i++)
                         bcc2_calc ^= data[i];
-                    }
-
-                    printf("BCC2 lido      = 0x%02X\n", bcc2_read);
-                    printf("BCC2 calculado = 0x%02X\n", bcc2_calc);
 
                     int frameSeq = (C == C_I1) ? 1 : 0;
 
+                    printf("I-frame seq=%d, payload_len=%d, BCC2 read=0x%02X calc=0x%02X\n",
+                           frameSeq, data_index - 1, bcc2_read, bcc2_calc);
+                    fflush(stdout);
+
                     if (bcc2_read == bcc2_calc) {
                         if (frameSeq == expectedSeq) {
-                            printf("I-frame %d valida\n", frameSeq);
+                            printf("New valid I-frame %d\n", frameSeq);
+                            fflush(stdout);
                             expectedSeq = 1 - expectedSeq;
 
                             if (expectedSeq == 0)
-                                send_supervision(fd, A_RX, C_RR0);
+                                send_supervision(fd, A_RX_REPLY, C_RR0);
                             else
-                                send_supervision(fd, A_RX, C_RR1);
+                                send_supervision(fd, A_RX_REPLY, C_RR1);
                         } else {
-                            printf("I-frame duplicada (seq=%d, esperado=%d)\n",
+                            printf("Duplicate I-frame %d (expected %d). Sending RR(expected).\n",
                                    frameSeq, expectedSeq);
+                            fflush(stdout);
 
                             if (expectedSeq == 0)
-                                send_supervision(fd, A_RX, C_RR0);
+                                send_supervision(fd, A_RX_REPLY, C_RR0);
                             else
-                                send_supervision(fd, A_RX, C_RR1);
+                                send_supervision(fd, A_RX_REPLY, C_RR1);
                         }
                     } else {
-                        printf("Erro no BCC2 - trama rejeitada\n");
+                        if (frameSeq == expectedSeq) {
+                            printf("BCC2 error on new I-frame %d. Sending REJ(current).\n", frameSeq);
+                            fflush(stdout);
 
-                        if (expectedSeq == 0)
-                            send_supervision(fd, A_RX, C_REJ0);
-                        else
-                            send_supervision(fd, A_RX, C_REJ1);
+                            if (expectedSeq == 0)
+                                send_supervision(fd, A_RX_REPLY, C_REJ0);
+                            else
+                                send_supervision(fd, A_RX_REPLY, C_REJ1);
+                        } else {
+                            printf("BCC2 error on duplicate I-frame %d. Sending RR(expected).\n", frameSeq);
+                            fflush(stdout);
+
+                            if (expectedSeq == 0)
+                                send_supervision(fd, A_RX_REPLY, C_RR0);
+                            else
+                                send_supervision(fd, A_RX_REPLY, C_RR1);
+                        }
                     }
 
-                    currentState = START;
+                    state = START;
                     data_index = 0;
                 } else {
                     if (data_index >= MAX_DATA_SIZE) {
-                        printf("Overflow no buffer\n");
-                        currentState = START;
+                        printf("Buffer overflow. Dropping frame.\n");
+                        fflush(stdout);
+                        state = START;
                         data_index = 0;
                     } else {
                         data[data_index++] = byte;
+                        if (byte == ESC)
+                            state = ESC_RCV;
+                    }
+                }
+                break;
+
+            case ESC_RCV:
+                /*
+                 * Destuffing support kept simple for test purposes.
+                 * If ESC is received inside I-frame data, the next octet must be XORed with 0x20.
+                 */
+                if (byte == FLAG) {
+                    printf("Invalid escape sequence before closing FLAG. Dropping frame.\n");
+                    fflush(stdout);
+                    state = START;
+                    data_index = 0;
+                } else {
+                    if (data_index <= 0 || data_index > MAX_DATA_SIZE) {
+                        state = START;
+                        data_index = 0;
+                    } else {
+                        data[data_index - 1] = (unsigned char)(byte ^ ESC_XOR);
+                        state = DATA_RCV;
                     }
                 }
                 break;
         }
     }
 
+cleanup:
     sleep(1);
-
-    if (tcsetattr(fd, TCSANOW, &oldtio) == -1) {
+    if (tcsetattr(fd, TCSANOW, &oldtio) == -1)
         perror("tcsetattr");
-        exit(-1);
-    }
-
     close(fd);
     return 0;
 }
