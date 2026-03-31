@@ -16,11 +16,16 @@
 #define FALSE 0
 #define TRUE 1
 
-#define FLAG   0x7E
-#define A_TX   0x03
-#define A_RX   0x03
+#define FLAG    0x7E
+#define ESC     0x7D
+#define ESC_XOR 0x20
+
+#define A_TX_CMD   0x03
+#define A_RX_REPLY 0x03
+
 #define C_SET  0x03
 #define C_UA   0x07
+#define C_DISC 0x0B
 #define C_I0   0x00
 #define C_I1   0x40
 #define C_RR0  0x05
@@ -31,25 +36,66 @@
 #define MAX_RETRIES 5
 #define TIMEOUT_SECS 3
 #define MAX_PAYLOAD_SIZE 256
+#define MAX_FRAME_SIZE (4 + 2 * (MAX_PAYLOAD_SIZE + 1) + 2)
 
 typedef enum {
     START,
     FLAG_RCV,
     A_RCV,
     C_RCV,
-    BCC_OK,
-    STOP_STATE
+    BCC_OK
 } state_t;
 
-static volatile int alarmEnabled = FALSE;
-static volatile int alarmCount = 0;
+static volatile sig_atomic_t alarmEnabled = FALSE;
+static volatile sig_atomic_t alarmCount = 0;
 
-static void alarmHandler(int signal)
+static void alarmHandler(int signo)
 {
-    (void)signal;
+    (void)signo;
     alarmEnabled = FALSE;
     alarmCount++;
-    printf("Alarm #%d received\n", alarmCount);
+    printf("Alarm #%d received\n", (int)alarmCount);
+    fflush(stdout);
+}
+
+static int read_byte(int fd, unsigned char *byte)
+{
+    int res = read(fd, byte, 1);
+
+    if (res < 0) {
+        if (errno == EINTR)
+            return 0;
+        perror("read");
+        return -1;
+    }
+
+    return res; /* 0 => no byte available now, 1 => got one byte */
+}
+
+static int configure_port(int fd, struct termios *oldtio)
+{
+    struct termios newtio;
+
+    if (tcgetattr(fd, oldtio) == -1) {
+        perror("tcgetattr");
+        return -1;
+    }
+
+    memset(&newtio, 0, sizeof(newtio));
+    newtio.c_cflag = BAUDRATE | CS8 | CLOCAL | CREAD;
+    newtio.c_iflag = IGNPAR;
+    newtio.c_oflag = 0;
+    newtio.c_lflag = 0;
+    newtio.c_cc[VTIME] = 1;
+    newtio.c_cc[VMIN] = 0;
+
+    tcflush(fd, TCIOFLUSH);
+    if (tcsetattr(fd, TCSANOW, &newtio) == -1) {
+        perror("tcsetattr");
+        return -1;
+    }
+
+    return 0;
 }
 
 static int send_supervision(int fd, unsigned char A, unsigned char C)
@@ -61,43 +107,78 @@ static int send_supervision(int fd, unsigned char A, unsigned char C)
     frame[3] = A ^ C;
     frame[4] = FLAG;
 
-    int res = write(fd, frame, sizeof(frame));
-    if (res < 0)
+    int written = write(fd, frame, sizeof(frame));
+    if (written < 0) {
         perror("write");
-    return res;
+        return -1;
+    }
+
+    printf("TX S-frame: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n",
+           frame[0], frame[1], frame[2], frame[3], frame[4]);
+    fflush(stdout);
+    return written;
 }
 
-static int send_iframe(int fd, const unsigned char *data, int data_len, int seq)
+static int build_iframe(unsigned char *frame,
+                        const unsigned char *data,
+                        int data_len,
+                        int seq)
 {
     if (data_len < 0 || data_len > MAX_PAYLOAD_SIZE)
         return -1;
 
-    unsigned char frame[4 + MAX_PAYLOAD_SIZE + 2];
     unsigned char C = seq ? C_I1 : C_I0;
     unsigned char bcc2 = 0x00;
+    int idx = 0;
 
-    frame[0] = FLAG;
-    frame[1] = A_TX;
-    frame[2] = C;
-    frame[3] = frame[1] ^ frame[2];
+    frame[idx++] = FLAG;
+    frame[idx++] = A_TX_CMD;
+    frame[idx++] = C;
+    frame[idx++] = (unsigned char)(A_TX_CMD ^ C);
+
+    for (int i = 0; i < data_len; i++)
+        bcc2 ^= data[i];
 
     for (int i = 0; i < data_len; i++) {
-        frame[4 + i] = data[i];
-        bcc2 ^= data[i];
+        if (data[i] == FLAG || data[i] == ESC) {
+            frame[idx++] = ESC;
+            frame[idx++] = (unsigned char)(data[i] ^ ESC_XOR);
+        } else {
+            frame[idx++] = data[i];
+        }
     }
 
-    frame[4 + data_len] = bcc2;
-    frame[5 + data_len] = FLAG;
+    if (bcc2 == FLAG || bcc2 == ESC) {
+        frame[idx++] = ESC;
+        frame[idx++] = (unsigned char)(bcc2 ^ ESC_XOR);
+    } else {
+        frame[idx++] = bcc2;
+    }
 
-    int frame_len = 6 + data_len - 0;
-    int res = write(fd, frame, frame_len);
-    if (res < 0)
-        perror("write");
-
-    return res;
+    frame[idx++] = FLAG;
+    return idx;
 }
 
-static int read_supervision_frame(int fd, unsigned char expectedA,
+static int send_iframe(int fd, const unsigned char *data, int data_len, int seq)
+{
+    unsigned char frame[MAX_FRAME_SIZE];
+    int frame_len = build_iframe(frame, data, data_len, seq);
+    if (frame_len < 0)
+        return -1;
+
+    int written = write(fd, frame, frame_len);
+    if (written < 0) {
+        perror("write");
+        return -1;
+    }
+
+    printf("TX I-frame seq=%d len=%d\n", seq, frame_len);
+    fflush(stdout);
+    return written;
+}
+
+static int read_supervision_frame(int fd,
+                                  unsigned char expectedA,
                                   const unsigned char *acceptedC,
                                   int acceptedCount,
                                   unsigned char *receivedC)
@@ -107,16 +188,10 @@ static int read_supervision_frame(int fd, unsigned char expectedA,
     unsigned char A = 0;
     unsigned char C = 0;
 
-    while (1) {
-        int res = read(fd, &byte, 1);
-
-        if (res < 0) {
-            if (errno == EINTR)
-                return 0; /* timeout */
-            perror("read");
+    while (alarmEnabled) {
+        int res = read_byte(fd, &byte);
+        if (res < 0)
             return -1;
-        }
-
         if (res == 0)
             continue;
 
@@ -166,7 +241,7 @@ static int read_supervision_frame(int fd, unsigned char expectedA,
             case C_RCV:
                 if (byte == FLAG) {
                     state = FLAG_RCV;
-                } else if (byte == (A ^ C)) {
+                } else if (byte == (unsigned char)(A ^ C)) {
                     state = BCC_OK;
                 } else {
                     state = START;
@@ -175,155 +250,134 @@ static int read_supervision_frame(int fd, unsigned char expectedA,
 
             case BCC_OK:
                 if (byte == FLAG) {
-                    if (receivedC)
+                    if (receivedC != NULL)
                         *receivedC = C;
                     return 1;
                 }
                 state = START;
                 break;
-
-            case STOP_STATE:
-                return -1;
         }
     }
+
+    return 0; /* timeout */
 }
 
 int main(int argc, char *argv[])
 {
     if (argc < 2) {
-        printf("Incorrect program usage\n"
-               "Usage: %s <SerialPort>\n"
-               "Example: %s /dev/ttyS1\n",
-               argv[0], argv[0]);
-        exit(1);
+        printf("Usage: %s <SerialPort>\n"
+               "Example: %s /dev/ttyS0\n", argv[0], argv[0]);
+        return 1;
     }
 
     const char *serialPortName = argv[1];
-
     int fd = open(serialPortName, O_RDWR | O_NOCTTY);
     if (fd < 0) {
         perror(serialPortName);
-        exit(-1);
+        return 1;
     }
 
     struct termios oldtio;
-    struct termios newtio;
-
-    if (tcgetattr(fd, &oldtio) == -1) {
-        perror("tcgetattr");
-        exit(-1);
+    if (configure_port(fd, &oldtio) < 0) {
+        close(fd);
+        return 1;
     }
-
-    memset(&newtio, 0, sizeof(newtio));
-    newtio.c_cflag = BAUDRATE | CS8 | CLOCAL | CREAD;
-    newtio.c_iflag = IGNPAR;
-    newtio.c_oflag = 0;
-    newtio.c_lflag = 0;
-    newtio.c_cc[VTIME] = 0;
-    newtio.c_cc[VMIN] = 1;
-
-    tcflush(fd, TCIOFLUSH);
-    if (tcsetattr(fd, TCSANOW, &newtio) == -1) {
-        perror("tcsetattr");
-        exit(-1);
-    }
-
-    printf("New termios structure set\n");
 
     struct sigaction act;
     memset(&act, 0, sizeof(act));
-    act.sa_handler = &alarmHandler;
+    act.sa_handler = alarmHandler;
     sigemptyset(&act.sa_mask);
     act.sa_flags = 0;
-
     if (sigaction(SIGALRM, &act, NULL) == -1) {
         perror("sigaction");
-        exit(1);
+        tcsetattr(fd, TCSANOW, &oldtio);
+        close(fd);
+        return 1;
     }
 
-    printf("Alarm configured\n");
+    printf("Transmitter ready on %s\n", serialPortName);
+    fflush(stdout);
 
-    /* 1) Establish connection: send SET, wait UA */
-    unsigned char uaC = 0;
     unsigned char acceptedUA[] = {C_UA};
+    unsigned char receivedC = 0;
     int connected = FALSE;
 
     while (!connected && alarmCount < MAX_RETRIES) {
         if (!alarmEnabled) {
-            printf("Sending SET...\n");
-            fflush(stdout);
-            send_supervision(fd, A_TX, C_SET);
+            if (send_supervision(fd, A_TX_CMD, C_SET) < 0)
+                goto cleanup_error;
             alarm(TIMEOUT_SECS);
             alarmEnabled = TRUE;
         }
 
-        int res = read_supervision_frame(fd, A_RX, acceptedUA, 1, &uaC);
+        int res = read_supervision_frame(fd, A_RX_REPLY, acceptedUA, 1, &receivedC);
+        if (res < 0)
+            goto cleanup_error;
         if (res == 1) {
             alarm(0);
             alarmEnabled = FALSE;
             connected = TRUE;
             printf("UA received. Connection established.\n");
             fflush(stdout);
-        } else if (res < 0) {
-            break;
         }
     }
 
     if (!connected) {
         printf("Failed to establish connection\n");
-            fflush(stdout);
-        tcsetattr(fd, TCSANOW, &oldtio);
-        close(fd);
-        return 1;
+        fflush(stdout);
+        goto cleanup_error;
     }
 
-    /* 2) Send one I-frame with seq = 0 and wait RR1 / REJ0 */
     unsigned char payload[] = {0x01, 0x02, 0x03, 0x04, 0x05};
+    int seq = 0;
     unsigned char acceptedAck[] = {C_RR1, C_REJ0};
-    unsigned char ackC = 0;
-    int done = FALSE;
+    int frameDone = FALSE;
+
     alarmCount = 0;
     alarmEnabled = FALSE;
 
-    while (!done && alarmCount < MAX_RETRIES) {
+    while (!frameDone && alarmCount < MAX_RETRIES) {
         if (!alarmEnabled) {
-            printf("Sending I0 frame...\n");
-            fflush(stdout);
-            send_iframe(fd, payload, (int)sizeof(payload), 0);
+            if (send_iframe(fd, payload, (int)sizeof(payload), seq) < 0)
+                goto cleanup_error;
             alarm(TIMEOUT_SECS);
             alarmEnabled = TRUE;
         }
 
-        int res = read_supervision_frame(fd, A_RX, acceptedAck, 2, &ackC);
+        int res = read_supervision_frame(fd, A_RX_REPLY, acceptedAck, 2, &receivedC);
+        if (res < 0)
+            goto cleanup_error;
         if (res == 1) {
             alarm(0);
             alarmEnabled = FALSE;
 
-            if (ackC == C_RR1) {
-                printf("RR1 received. Frame accepted.\n");
-            fflush(stdout);
-                done = TRUE;
-            } else if (ackC == C_REJ0) {
-                printf("REJ0 received. Retransmitting...\n");
-            fflush(stdout);
-                alarmEnabled = FALSE;
+            if (receivedC == C_RR1) {
+                printf("RR1 received. I0 accepted.\n");
+                fflush(stdout);
+                frameDone = TRUE;
+            } else if (receivedC == C_REJ0) {
+                printf("REJ0 received. Retransmitting I0.\n");
+                fflush(stdout);
             }
-        } else if (res < 0) {
-            break;
         }
     }
 
-    if (!done) {
+    if (!frameDone) {
         printf("Failed to send I-frame successfully\n");
+        fflush(stdout);
+        goto cleanup_error;
     }
 
     sleep(1);
-
-    if (tcsetattr(fd, TCSANOW, &oldtio) == -1) {
+    if (tcsetattr(fd, TCSANOW, &oldtio) == -1)
         perror("tcsetattr");
-        exit(-1);
-    }
-
     close(fd);
     return 0;
+
+cleanup_error:
+    sleep(1);
+    if (tcsetattr(fd, TCSANOW, &oldtio) == -1)
+        perror("tcsetattr");
+    close(fd);
+    return 1;
 }
