@@ -1,8 +1,7 @@
-#define _POSIX_C_SOURCE 200809L
 // Write to serial port in non-canonical mode
-// Adapted from the non-canonical example and from the link layer llwrite logic.
+//
+// Modified by: Eduardo Nuno Almeida [enalmeida@fe.up.pt]
 
-#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -16,301 +15,208 @@
 // Baudrate settings are defined in <asm/termbits.h>, which is
 // included by <termios.h>
 #define BAUDRATE B38400
+#define _POSIX_SOURCE 1 // POSIX compliant source
 
 #define FALSE 0
 #define TRUE 1
 
-#define MAX_PAYLOAD_SIZE 1000
-#define MAX_FRAME_SIZE (2 * MAX_PAYLOAD_SIZE + 6)
-#define MAX_RETRANSMISSIONS 3
-#define TIMEOUT_SECONDS 3
+#define BUF_SIZE 5
+#define BUF_SIZE2 1000
 
-#define FLAG 0x7e
-#define A_TX 0x03
-#define A_RX 0x01
-#define ESC 0x7d
+int fd;
+// teste
+struct termios oldtio;
+struct termios newtio;
 
-#define CONTROL_REJ(Nr) (0xaa | (Nr))
-#define CONTROL_RR(Nr)  (0x54 | (Nr))
-#define CONTROL_N(Ns)   ((Ns) << 7)
+int alarmEnabled = FALSE;
+int alarmCount = 0;
 
-typedef enum
-{
-    START_STATE,
-    FIRST_FLAG_STATE,
-    ADDRESS_STATE,
-    CONTROL_STATE,
-    BCC_STATE,
-    FINAL_STATE
-} State;
-
-volatile sig_atomic_t timeoutFlag = FALSE;
-
-static void alarmHandler(int signal)
-{
-    (void)signal;
-    timeoutFlag = TRUE;
+void alarmHandler(int signal) {
+  // Can be used to change a flag that increases the number of alarms
+  alarmEnabled = FALSE;
+  alarmCount++;
+  printf("Alarm #%d received\n", alarmCount);
 }
 
-static int configureNonCanonical(int fd, struct termios *oldtio)
-{
-    struct termios newtio;
+int llopen(const char *port) {
+  // 1. Abrir a porta série
+  fd = open(port, O_RDWR | O_NOCTTY);
+  if (fd < 0) {
+    perror(port);
+    return -1;
+  }
 
-    if (tcgetattr(fd, oldtio) == -1)
-        return -1;
+  // Guardar configurações atuais
+  if (tcgetattr(fd, &oldtio) == -1) {
+    perror("tcgetattr");
+    return -1;
+  }
 
-    memset(&newtio, 0, sizeof(newtio));
-    newtio.c_cflag = BAUDRATE | CS8 | CLOCAL | CREAD;
-    newtio.c_iflag = IGNPAR;
-    newtio.c_oflag = 0;
-    newtio.c_lflag = 0;
+  // Limpar e configurar nova estrutura
+  memset(&newtio, 0, sizeof(newtio));
+  newtio.c_cflag = BAUDRATE | CS8 | CLOCAL | CREAD;
+  newtio.c_iflag = IGNPAR;
+  newtio.c_oflag = 0;
+  newtio.c_lflag = 0;
 
-    // Polling-style read: lets us implement timeouts/retransmissions in user code.
-    newtio.c_cc[VTIME] = 1; // 0.1 s
-    newtio.c_cc[VMIN] = 0;
+  // TIMEOUTS: Fundamental para o alarme e a máquina de estados não encravarem
+  newtio.c_cc[VTIME] = 1; // 0.1 segundos de timeout
+  newtio.c_cc[VMIN] = 0;  // Non-blocking read
 
-    tcflush(fd, TCIOFLUSH);
-    if (tcsetattr(fd, TCSANOW, &newtio) == -1)
-        return -1;
+  tcflush(fd, TCIOFLUSH);
 
-    return 0;
-}
+  // Aplicar configurações
+  if (tcsetattr(fd, TCSANOW, &newtio) == -1) {
+    perror("tcsetattr");
+    return -1;
+  }
+  printf("Porta série configurada.\n");
 
-static int writeAll(int fd, const unsigned char *buf, int len)
-{
-    int total = 0;
+  unsigned char buf[5];
+  buf[0] = 0x7E;
+  buf[1] = 0x03;
+  buf[2] = 0x03;        // C da trama SET
+  buf[3] = 0x03 ^ 0x03; // BCC1
+  buf[4] = 0x7E;
 
-    while (total < len)
-    {
-        int written = write(fd, buf + total, len - total);
-        if (written < 0)
-        {
-            if (errno == EINTR)
-                continue;
-            return -1;
-        }
-        total += written;
+  typedef enum { START, FLAG_RCV, A_RCV, C_RCV, BCC_OK, END } state;
+  state currentstate = START;
+
+  int STOP = FALSE;
+  alarmCount = 0;
+  alarmEnabled = FALSE;
+
+  while (alarmCount < 3 && STOP == FALSE) {
+    // Se o alarme não está ativo, (re)transmite a trama
+    if (alarmEnabled == FALSE) {
+      write(fd, buf, 5);
+      printf("Trama SET enviada (Tentativa %d). À espera de UA...\n",
+             alarmCount + 1);
+      alarmEnabled = TRUE;
+      alarm(3);             // Ativa alarme para 3 segundos
+      currentstate = START; // Reinicia a máquina para a nova leitura
     }
 
-    return total;
-}
-
-static int buildInformationFrame(const unsigned char *payload, int payloadSize,
-                                 unsigned char sequenceNumber,
-                                 unsigned char *frame)
-{
-    unsigned char bcc2 = 0;
-    int frameLen = 0;
-
-    frame[frameLen++] = FLAG;
-    frame[frameLen++] = A_TX;
-    frame[frameLen++] = CONTROL_N(sequenceNumber);
-    frame[frameLen++] = A_TX ^ CONTROL_N(sequenceNumber);
-
-    for (int i = 0; i < payloadSize; i++)
-    {
-        bcc2 ^= payload[i];
-
-        if (payload[i] == FLAG || payload[i] == ESC)
-        {
-            frame[frameLen++] = ESC;
-            frame[frameLen++] = payload[i] ^ 0x20;
-        }
+    unsigned char byte_lido;
+    // Lê um byte. Como VTIME=1, se não houver nada, ele não bloqueia para
+    // sempre.
+    if (read(fd, &byte_lido, 1) > 0) {
+      switch (currentstate) {
+      case START:
+        if (byte_lido == 0x7E)
+          currentstate = FLAG_RCV;
+        break;
+      case FLAG_RCV:
+        if (byte_lido == 0x03)
+          currentstate = A_RCV;
+        else if (byte_lido != 0x7E)
+          currentstate = START;
+        break;
+      case A_RCV:
+        if (byte_lido == 0x07)
+          currentstate = C_RCV; // Esperamos o UA (0x07)!
+        else if (byte_lido == 0x7E)
+          currentstate = FLAG_RCV;
         else
-        {
-            frame[frameLen++] = payload[i];
-        }
-    }
-
-    if (bcc2 == FLAG || bcc2 == ESC)
-    {
-        frame[frameLen++] = ESC;
-        frame[frameLen++] = bcc2 ^ 0x20;
-    }
-    else
-    {
-        frame[frameLen++] = bcc2;
-    }
-
-    frame[frameLen++] = FLAG;
-    return frameLen;
-}
-
-static int readSupervisionFrame(int fd, unsigned char *control)
-{
-    unsigned char byte = 0;
-    State state = START_STATE;
-
-    while (!timeoutFlag && state != FINAL_STATE)
-    {
-        int bytes = read(fd, &byte, 1);
-        if (bytes < 0)
-        {
-            if (errno == EINTR)
-                continue;
-            return -1;
-        }
-        if (bytes == 0)
-            continue;
-
-        switch (state)
-        {
-        case START_STATE:
-            if (byte == FLAG)
-                state = FIRST_FLAG_STATE;
-            break;
-
-        case FIRST_FLAG_STATE:
-            if (byte == A_RX)
-                state = ADDRESS_STATE;
-            else if (byte != FLAG)
-                state = START_STATE;
-            break;
-
-        case ADDRESS_STATE:
-            if (byte == CONTROL_RR(0) || byte == CONTROL_RR(1) ||
-                byte == CONTROL_REJ(0) || byte == CONTROL_REJ(1))
-            {
-                *control = byte;
-                state = CONTROL_STATE;
-            }
-            else if (byte == FLAG)
-            {
-                state = FIRST_FLAG_STATE;
-            }
-            else
-            {
-                state = START_STATE;
-            }
-            break;
-
-        case CONTROL_STATE:
-            if (byte == (A_RX ^ *control))
-                state = BCC_STATE;
-            else if (byte == FLAG)
-                state = FIRST_FLAG_STATE;
-            else
-                state = START_STATE;
-            break;
-
-        case BCC_STATE:
-            if (byte == FLAG)
-                state = FINAL_STATE;
-            else
-                state = START_STATE;
-            break;
-
-        default:
-            state = START_STATE;
-            break;
-        }
-    }
-
-    return state == FINAL_STATE ? 1 : 0;
-}
-
-int main(int argc, char *argv[])
-{
-    if (argc < 2)
-    {
-        printf("Incorrect program usage\n"
-               "Usage: %s <SerialPort> [message]\n"
-               "Example: %s /dev/ttyS1 \"Hello\"\n",
-               argv[0], argv[0]);
-        return 1;
-    }
-
-    const char *serialPortName = argv[1];
-    const unsigned char *payload = (argc >= 3)
-                                       ? (const unsigned char *)argv[2]
-                                       : (const unsigned char *)"Mensagem enviada em modo non-canonical";
-    int payloadSize = (int)strlen((const char *)payload);
-
-    if (payloadSize <= 0 || payloadSize > MAX_PAYLOAD_SIZE)
-    {
-        fprintf(stderr, "Payload size must be between 1 and %d bytes\n", MAX_PAYLOAD_SIZE);
-        return 1;
-    }
-
-    int fd = open(serialPortName, O_RDWR | O_NOCTTY);
-    if (fd < 0)
-    {
-        perror(serialPortName);
-        return 1;
-    }
-
-    struct termios oldtio;
-    if (configureNonCanonical(fd, &oldtio) == -1)
-    {
-        perror("configureNonCanonical");
-        close(fd);
-        return 1;
-    }
-
-    struct sigaction act;
-    memset(&act, 0, sizeof(act));
-    act.sa_handler = alarmHandler;
-    if (sigaction(SIGALRM, &act, NULL) == -1)
-    {
-        perror("sigaction");
-        tcsetattr(fd, TCSANOW, &oldtio);
-        close(fd);
-        return 1;
-    }
-
-    unsigned char frame[MAX_FRAME_SIZE];
-    unsigned char sequenceNumber = 0;
-    int frameLen = buildInformationFrame(payload, payloadSize, sequenceNumber, frame);
-
-    int success = FALSE;
-    for (int attempt = 1; attempt <= MAX_RETRANSMISSIONS && !success; attempt++)
-    {
-        unsigned char control = 0;
-
-        printf("[write_noncanonical] Attempt #%d: sending %d-byte payload...\n",
-               attempt, payloadSize);
-
-        if (writeAll(fd, frame, frameLen) < 0)
-        {
-            perror("write");
-            break;
-        }
-        tcdrain(fd);
-
-        timeoutFlag = FALSE;
-        alarm(TIMEOUT_SECONDS);
-
-        int result = readSupervisionFrame(fd, &control);
-        alarm(0);
-
-        if (result < 0)
-        {
-            perror("read");
-            break;
-        }
-
-        if (result == 1 && control == CONTROL_RR((sequenceNumber + 1) % 2))
-        {
-            printf("[write_noncanonical] RR received. Frame accepted.\n");
-            success = TRUE;
-        }
-        else if (result == 1 && control == CONTROL_REJ(sequenceNumber))
-        {
-            printf("[write_noncanonical] REJ received. Retransmitting...\n");
-        }
+          currentstate = START;
+        break;
+      case C_RCV:
+        if (byte_lido == (0x03 ^ 0x07))
+          currentstate = BCC_OK; // Verifica o BCC do UA
+        else if (byte_lido == 0x7E)
+          currentstate = FLAG_RCV;
         else
-        {
-            printf("[write_noncanonical] Timeout or unexpected response. Retransmitting...\n");
+          currentstate = START;
+        break;
+      case BCC_OK:
+        if (byte_lido == 0x7E) {
+          currentstate = END;
+          STOP = TRUE;
+          alarm(0); // DESLIGA O ALARME!
+          printf("Trama UA recebida com sucesso. Ligação estabelecida!\n");
+        } else {
+          currentstate = START;
         }
+        break;
+      case END:
+        break;
+      }
     }
+  }
 
-    if (!success)
-        fprintf(stderr, "[write_noncanonical] Failed to send frame after %d attempts\n",
-                MAX_RETRANSMISSIONS);
+  // Verifica se saímos do ciclo por sucesso ou por exceder retransmissões
+  if (STOP == FALSE) {
+    printf("Falha: Limite máximo de retransmissões excedido.\n");
+    return -1;
+  }
 
-    if (tcsetattr(fd, TCSANOW, &oldtio) == -1)
-        perror("tcsetattr");
+  return 1; // Sucesso
+}
 
-    close(fd);
-    return success ? 0 : 1;
+int llclose() {
+  // Wait until all bytes have been written to the serial port
+  sleep(1);
+
+  // Restore the old port settings
+  if (tcsetattr(fd, TCSANOW, &oldtio) == -1) {
+    perror("tcsetattr");
+    exit(-1);
+  }
+
+  close(fd);
+  return 0;
+}
+volatile int STOP = FALSE;
+
+int main(int argc, char *argv[]) {
+
+  // Set alarm function handler.
+  // Install the function signal to be automatically invoked when the timer
+  // expires, invoking in its turn the user function alarmHandler
+  struct sigaction act = {0};
+  act.sa_handler = &alarmHandler;
+  if (sigaction(SIGALRM, &act, NULL) == -1) {
+    perror("sigaction");
+    exit(1);
+  }
+  // Program usage: Uses either COM1 or COM2
+  const char *serialPortName = argv[1];
+
+  if (argc < 2) {
+    printf("Incorrect program usage\n"
+           "Usage: %s <SerialPort>\n"
+           "Example: %s /dev/ttyS1\n",
+           argv[0], argv[0]);
+    exit(1);
+  }
+
+  // Open serial port device for reading and writing, and not as controlling tty
+  // because we don't want to get killed if linenoise sends CTRL-C.
+  llopen(serialPortName);
+
+  // Create string to send
+  unsigned char buf[BUF_SIZE] = {0};
+
+  // In non-canonical mode, '\n' does not end the writing.
+  // Test this condition by placing a '\n' in the middle of the buffer.
+  // The whole buffer must be sent even with the '\n'.
+
+  int bytes = write(fd, buf, BUF_SIZE);
+  printf("%d bytes written\n", bytes);
+
+  // Enable alarm in t seconds
+  int t = 3;
+  alarm(t);
+
+  buf[bytes] = '\0';
+
+  typedef enum { START, FLAG_RCV, A_RCV, C_RCV, BCC_OK, END } state;
+
+  state currentstate = START;
+
+  unsigned char buf2[BUF_SIZE2] = {0};
+
+  llclose();
+
+  return 0;
 }
