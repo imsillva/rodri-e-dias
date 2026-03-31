@@ -18,7 +18,7 @@
 
 #define FLAG   0x7E
 #define A_TX   0x03
-#define A_RX   0x01
+#define A_RX   0x03
 
 #define C_SET  0x03
 #define C_UA   0x07
@@ -113,6 +113,7 @@ int main(int argc, char *argv[])
             continue;
 
         printf("byte = 0x%02X\n", byte);
+        fflush(stdout);
 
         switch (currentState) {
             case START:
@@ -137,6 +138,9 @@ int main(int argc, char *argv[])
                 } else if (connState == DISCONNECTED && byte == C_SET) {
                     C = byte;
                     currentState = C_RCV;
+                } else if (connState == CONNECTED && byte == C_SET) {
+                    C = byte;
+                    currentState = C_RCV;
                 } else if (connState == CONNECTED && (byte == C_I0 || byte == C_I1)) {
                     C = byte;
                     currentState = C_RCV;
@@ -157,7 +161,7 @@ int main(int argc, char *argv[])
 
             case BCC1_RCV:
                 if (byte == FLAG) {
-                    if (connState == DISCONNECTED && C == C_SET) {
+                    if (C == C_SET) {
                         printf("SET recebido com sucesso\n");
                         send_supervision(fd, A_RX, C_UA);
                         printf("UA enviada\n");
