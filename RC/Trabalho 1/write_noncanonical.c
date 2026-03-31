@@ -20,7 +20,7 @@
 #define FALSE 0
 #define TRUE 1
 
-#define BUF_SIZE 5
+#define BUF_SIZE 11
 //alarme 
 int alarmEnabled = FALSE;
 int alarmCount = 0;
@@ -82,7 +82,7 @@ int main(int argc, char *argv[])
     // Set input mode (non-canonical, no echo,...)
     newtio.c_lflag = 0;
     newtio.c_cc[VTIME] = 0; // Inter-character timer unused
-    newtio.c_cc[VMIN] = 0;  // Blocking read until 5 chars received
+    newtio.c_cc[VMIN] = 5;  // Blocking read until 5 chars received
 
     // VTIME e VMIN should be changed in order to protect with a
     // timeout the reception of the following character(s)
@@ -114,13 +114,22 @@ int main(int argc, char *argv[])
     // In non-canonical mode, '\n' does not end the writing.
     // Test this condition by placing a '\n' in the middle of the buffer.
     // The whole buffer must be sent even with the '\n'.
-    unsigned char xor_read;
-    unsigned char BCC1 =  0x03 ^ 0x03 ;
-    unsigned char data[BUF_SIZE] = {0x01,0x02,0x03,0x04,0x05};
-    for( int j = 0 ; j < BUF_SIZE ; j++){
-        xor_read = xor_read ^ data[j];
-    }
-    unsigned char buf[7] = {0x7E,0x03,0x03,BCC1,data,xor_read,0x7E};
+    unsigned char BCC1 =  0x03 ^ 0x03;
+    unsigned char buf[BUF_SIZE + 1] = {0};
+    buf[0] = 0x7E;
+    buf[1] = 0x03;
+    buf[2] = 0x03;
+    buf[3] = BCC1;
+    buf[4] = 0x01;
+    buf[5] = 0x02;
+    buf[6] = 0x03;
+    buf[7] = 0x04;
+    buf[8] = 0x05;
+    unsigned char XOR = 0x01 ^ 0x02 ^ 0x03 ^ 0x04 ^ 0x05;
+    buf[9] = XOR;
+    buf[10] = 0x7E;
+
+
     struct sigaction act = {0};
     act.sa_handler = &alarmHandler;
     if (sigaction(SIGALRM, &act, NULL) == -1)
@@ -137,11 +146,9 @@ int main(int argc, char *argv[])
         {
             alarm(3); // Set alarm to be triggered in 3s
             alarmEnabled = TRUE;
+            write(fd, buf, sizeof(buf));
        } 
-
-
-        write(fd, buf, BUF_SIZE);
-        unsigned char buf2[BUF_SIZE] = {0};
+        unsigned char buf2[5] = {0};
         int bytesa = read(fd, buf2, 5);
 
         if(bytesa == 5){
