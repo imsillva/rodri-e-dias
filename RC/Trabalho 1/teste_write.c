@@ -58,18 +58,46 @@ static void alarmHandler(int signo)
     fflush(stdout);
 }
 
+static int write_all(int fd, const unsigned char *buf, size_t len)
+{
+    size_t total = 0;
+
+    while (total < len) {
+        ssize_t res = write(fd, buf + total, len - total);
+        if (res < 0) {
+            if (errno == EINTR)
+                continue;
+            perror("write");
+            return -1;
+        }
+        if (res == 0) {
+            fprintf(stderr, "write returned 0 unexpectedly\n");
+            return -1;
+        }
+        total += (size_t)res;
+    }
+
+    if (tcdrain(fd) == -1) {
+        perror("tcdrain");
+        return -1;
+    }
+
+    return 0;
+}
+
+/* FIX: trata EAGAIN (porto em modo não-bloqueante) e EINTR (sinal) */
 static int read_byte(int fd, unsigned char *byte)
 {
     int res = read(fd, byte, 1);
 
     if (res < 0) {
-        if (errno == EINTR)
+        if (errno == EINTR || errno == EAGAIN)
             return 0;
         perror("read");
         return -1;
     }
 
-    return res; /* 0 => no byte available now, 1 => got one byte */
+    return res;
 }
 
 static int configure_port(int fd, struct termios *oldtio)
@@ -107,16 +135,11 @@ static int send_supervision(int fd, unsigned char A, unsigned char C)
     frame[3] = A ^ C;
     frame[4] = FLAG;
 
-    int written = write(fd, frame, sizeof(frame));
-    if (written < 0) {
-        perror("write");
-        return -1;
-    }
-
     printf("TX S-frame: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n",
            frame[0], frame[1], frame[2], frame[3], frame[4]);
     fflush(stdout);
-    return written;
+
+    return write_all(fd, frame, sizeof(frame));
 }
 
 static int build_iframe(unsigned char *frame,
@@ -166,15 +189,13 @@ static int send_iframe(int fd, const unsigned char *data, int data_len, int seq)
     if (frame_len < 0)
         return -1;
 
-    int written = write(fd, frame, frame_len);
-    if (written < 0) {
-        perror("write");
-        return -1;
-    }
-
-    printf("TX I-frame seq=%d len=%d\n", seq, frame_len);
+    printf("TX I-frame bytes:");
+    for (int i = 0; i < frame_len; i++)
+        printf(" 0x%02X", frame[i]);
+    printf("\n");
     fflush(stdout);
-    return written;
+
+    return write_all(fd, frame, (size_t)frame_len);
 }
 
 static int read_supervision_frame(int fd,
@@ -206,7 +227,7 @@ static int read_supervision_frame(int fd,
 
             case FLAG_RCV:
                 if (byte == FLAG) {
-                    /* keep sync */
+                    /* múltiplos FLAGS consecutivos são válidos */
                 } else if (byte == expectedA) {
                     A = byte;
                     state = A_RCV;
@@ -259,7 +280,7 @@ static int read_supervision_frame(int fd,
         }
     }
 
-    return 0; /* timeout */
+    return 0;
 }
 
 int main(int argc, char *argv[])
@@ -271,7 +292,9 @@ int main(int argc, char *argv[])
     }
 
     const char *serialPortName = argv[1];
-    int fd = open(serialPortName, O_RDWR | O_NOCTTY);
+
+    /* FIX: abrir com O_NONBLOCK para evitar bloqueio na espera de DCD */
+    int fd = open(serialPortName, O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (fd < 0) {
         perror(serialPortName);
         return 1;
@@ -283,11 +306,23 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    /* FIX: limpar O_NONBLOCK após configurar a porta;
+     * o VTIME=1 VMIN=0 do termios controla agora o timeout das leituras */
+    {
+        int flags = fcntl(fd, F_GETFL, 0);
+        if (flags == -1 || fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) == -1) {
+            perror("fcntl");
+            tcsetattr(fd, TCSANOW, &oldtio);
+            close(fd);
+            return 1;
+        }
+    }
+
     struct sigaction act;
     memset(&act, 0, sizeof(act));
     act.sa_handler = alarmHandler;
     sigemptyset(&act.sa_mask);
-    act.sa_flags = 0;
+    act.sa_flags = 0;   /* sem SA_RESTART para que read() retorne EINTR */
     if (sigaction(SIGALRM, &act, NULL) == -1) {
         perror("sigaction");
         tcsetattr(fd, TCSANOW, &oldtio);
@@ -306,8 +341,9 @@ int main(int argc, char *argv[])
         if (!alarmEnabled) {
             if (send_supervision(fd, A_TX_CMD, C_SET) < 0)
                 goto cleanup_error;
-            alarm(TIMEOUT_SECS);
+            /* FIX: definir alarmEnabled ANTES de armar o alarme */
             alarmEnabled = TRUE;
+            alarm(TIMEOUT_SECS);
         }
 
         int res = read_supervision_frame(fd, A_RX_REPLY, acceptedUA, 1, &receivedC);
@@ -340,8 +376,9 @@ int main(int argc, char *argv[])
         if (!alarmEnabled) {
             if (send_iframe(fd, payload, (int)sizeof(payload), seq) < 0)
                 goto cleanup_error;
-            alarm(TIMEOUT_SECS);
+            /* FIX: definir alarmEnabled ANTES de armar o alarme */
             alarmEnabled = TRUE;
+            alarm(TIMEOUT_SECS);
         }
 
         int res = read_supervision_frame(fd, A_RX_REPLY, acceptedAck, 2, &receivedC);
