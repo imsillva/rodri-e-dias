@@ -32,23 +32,35 @@ typedef enum {
 } LinkLayerRole;
 
 typedef struct {
-    const char *port;
+    const char   *port;
     LinkLayerRole role;
-    int timeout;
-    int numTransmissions;
+    int           timeout;
+    int           numTransmissions;
+
+    /* ---- Parâmetros de teste ---- */
+
+    /* Probabilidade de erro por frame: 0.0 = sem erros, 1.0 = erro sempre.
+     * Quando ocorre um erro, o BCC2 da I-frame é corrompido antes de enviar,
+     * fazendo com que o receptor responda com REJ e force uma retransmissão. */
+    double fer;   /* Frame Error Rate, ex: 0.1 = 10% de probabilidade de erro */
+
+    /* Atraso de propagação artificial em milissegundos adicionado antes de
+     * cada envio de I-frame, para simular cabos longos ou ligações lentas. */
+    int propagation_delay_ms;
+
 } LinkLayerConfig;
 
 typedef struct {
-    int fd;
-    struct termios oldtio;
+    int             fd;
+    struct termios  oldtio;
     LinkLayerConfig config;
-    int txSequence;
-    int rxExpectedSequence;
+    int             txSequence;
+    int             rxExpectedSequence;
 } LinkLayer;
 
-int llopen(LinkLayer *ll, const LinkLayerConfig *config);
-int llwrite(LinkLayer *ll, const unsigned char *buffer, int length);
-int llread(LinkLayer *ll, unsigned char *buffer, int max_len);
-int llclose(LinkLayer *ll);
+int llopen (LinkLayer *ll, const LinkLayerConfig *config);
+int llwrite (LinkLayer *ll, const unsigned char *buffer, int length);
+int llread  (LinkLayer *ll, unsigned char *buffer, int max_len);
+int llclose (LinkLayer *ll);
 
 #endif
