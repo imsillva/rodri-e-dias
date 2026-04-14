@@ -4,9 +4,89 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define FALSE 0
 #define TRUE 1
+
+/* ------------------------------------------------------------------ */
+/* Métricas de desempenho                                               */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    struct timespec t_start;        /* início da transferência de dados  */
+    struct timespec t_end;          /* fim da transferência de dados     */
+    size_t          file_size;      /* tamanho do ficheiro em bytes      */
+    size_t          bytes_sent;     /* payload útil enviado              */
+    size_t          raw_bytes;      /* bytes brutos na ligação série     */
+    unsigned long   frames_sent;    /* I-frames enviadas                 */
+    unsigned long   retransmissions;/* retransmissões (REJ recebidos)    */
+    int             baudrate;       /* bps da ligação série              */
+} PerfStats;
+
+static void perf_start(PerfStats *s)
+{
+    clock_gettime(CLOCK_MONOTONIC, &s->t_start);
+}
+
+static void perf_stop(PerfStats *s)
+{
+    clock_gettime(CLOCK_MONOTONIC, &s->t_end);
+}
+
+static double perf_elapsed_s(const PerfStats *s)
+{
+    double sec  = (double)(s->t_end.tv_sec  - s->t_start.tv_sec);
+    double nsec = (double)(s->t_end.tv_nsec - s->t_start.tv_nsec);
+    return sec + nsec * 1e-9;
+}
+
+static void perf_print(const PerfStats *s)
+{
+    double elapsed   = perf_elapsed_s(s);
+    double throughput = (elapsed > 0.0)
+                        ? (double)s->file_size / elapsed
+                        : 0.0;
+
+    /* Eficiência = bits de dados úteis / bits brutos transmitidos */
+    double efficiency = (s->raw_bytes > 0)
+                        ? (double)s->file_size / (double)s->raw_bytes * 100.0
+                        : 0.0;
+
+    /* Eficiência teórica de Stop-and-Wait:
+     *   S = 1 / (1 + 2a)   onde  a = t_prop / t_frame
+     * Com cabo local (t_prop ≈ 0), S ≈ 1 — aqui mostramos só o cálculo
+     * com base nos valores reais. */
+    double goodput_ratio = (s->raw_bytes > 0 && elapsed > 0.0)
+                           ? throughput / ((double)s->baudrate / 8.0) * 100.0
+                           : 0.0;
+
+    printf("\n╔══════════════════════════════════════════════╗\n");
+    printf(  "║            MÉTRICAS DE DESEMPENHO            ║\n");
+    printf(  "╚══════════════════════════════════════════════╝\n");
+    printf("  Tamanho do ficheiro  : %zu bytes\n",         s->file_size);
+    printf("  Payload útil enviado : %zu bytes\n",         s->bytes_sent);
+    printf("  Bytes brutos na linha: %zu bytes\n",         s->raw_bytes);
+    printf("  I-frames enviadas    : %lu\n",               s->frames_sent);
+    printf("  Retransmissões       : %lu\n",               s->retransmissions);
+    printf("  Tempo de transferência: %.4f s\n",           elapsed);
+    printf("  Débito (throughput)  : %.2f bytes/s  (%.2f kbytes/s)\n",
+           throughput, throughput / 1024.0);
+    printf("  Débito em bits/s     : %.2f bps\n",          throughput * 8.0);
+    printf("  Eficiência (dados/raw): %.2f %%\n",          efficiency);
+    printf("  Goodput / capacidade : %.2f %%  (a %d bps)\n",
+           goodput_ratio, s->baudrate);
+    printf("  Taxa de retransmissão: %.2f %%\n",
+           (s->frames_sent > 0)
+               ? (double)s->retransmissions / (double)s->frames_sent * 100.0
+               : 0.0);
+    printf("────────────────────────────────────────────────\n\n");
+    fflush(stdout);
+}
+
+/* ------------------------------------------------------------------ */
+/* Estruturas internas                                                  */
+/* ------------------------------------------------------------------ */
 
 typedef struct {
     FILE *fp;
@@ -19,27 +99,27 @@ typedef struct {
     int ended;
 } AppRxState;
 
+/* ------------------------------------------------------------------ */
+/* Utilidades                                                           */
+/* ------------------------------------------------------------------ */
+
 static const char *safe_basename(const char *path)
 {
-    const char *slash = strrchr(path, '/');
+    const char *slash     = strrchr(path, '/');
     const char *backslash = strrchr(path, '\\');
-    const char *base = path;
+    const char *base      = path;
 
-    if (slash != NULL && slash[1] != '\0') {
-        base = slash + 1;
-    }
-    if (backslash != NULL && backslash[1] != '\0' && backslash + 1 > base) {
+    if (slash     != NULL && slash[1]     != '\0') base = slash + 1;
+    if (backslash != NULL && backslash[1] != '\0' && backslash + 1 > base)
         base = backslash + 1;
-    }
     return base;
 }
 
 static size_t decode_size_value(const unsigned char *buf, int len)
 {
     size_t value = 0;
-    for (int i = 0; i < len; i++) {
+    for (int i = 0; i < len; i++)
         value = (value << 8) | buf[i];
-    }
     return value;
 }
 
@@ -48,7 +128,6 @@ static int encode_size_tlv(unsigned char *dst, size_t file_size)
     unsigned char tmp[sizeof(size_t)];
     int n = 0;
     size_t value = file_size;
-
     do {
         tmp[n++] = (unsigned char)(value & 0xFFu);
         value >>= 8;
@@ -56,10 +135,8 @@ static int encode_size_tlv(unsigned char *dst, size_t file_size)
 
     dst[0] = APP_T_SIZE;
     dst[1] = (unsigned char)n;
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < n; i++)
         dst[2 + i] = tmp[n - 1 - i];
-    }
-
     return 2 + n;
 }
 
@@ -68,11 +145,9 @@ static int build_control_packet(unsigned char *packet,
                                 const char *filename,
                                 size_t file_size)
 {
-    const char *base = safe_basename(filename);
-    size_t name_len = strlen(base);
-    if (name_len > 255) {
-        return -1;
-    }
+    const char *base     = safe_basename(filename);
+    size_t      name_len = strlen(base);
+    if (name_len > 255) return -1;
 
     int idx = 0;
     packet[idx++] = control;
@@ -82,20 +157,14 @@ static int build_control_packet(unsigned char *packet,
     memcpy(&packet[idx], base, name_len);
     idx += (int)name_len;
 
-    if (idx > LL_MAX_PAYLOAD_SIZE) {
-        return -1;
-    }
-    return idx;
+    return (idx > LL_MAX_PAYLOAD_SIZE) ? -1 : idx;
 }
 
 static int build_data_packet(unsigned char *packet,
                              const unsigned char *data,
                              size_t data_len)
 {
-    if (data_len > APP_DATA_CHUNK) {
-        return -1;
-    }
-
+    if (data_len > APP_DATA_CHUNK) return -1;
     packet[0] = APP_DATA;
     packet[1] = (unsigned char)((data_len >> 8) & 0xFFu);
     packet[2] = (unsigned char)(data_len & 0xFFu);
@@ -110,24 +179,20 @@ static int parse_control_packet(const unsigned char *payload,
                                 size_t file_name_size,
                                 size_t *file_size)
 {
-    if (payload_len < 1 || payload[0] != expected_control) {
-        return -1;
-    }
+    if (payload_len < 1 || payload[0] != expected_control) return -1;
 
-    int idx = 1;
+    int idx      = 1;
     int saw_name = FALSE;
     int saw_size = FALSE;
 
     while (idx + 2 <= payload_len) {
         unsigned char type = payload[idx++];
-        unsigned char len = payload[idx++];
-        if (idx + len > payload_len) {
-            return -1;
-        }
+        unsigned char len  = payload[idx++];
+        if (idx + len > payload_len) return -1;
 
         if (type == APP_T_SIZE) {
             *file_size = decode_size_value(&payload[idx], len);
-            saw_size = TRUE;
+            saw_size   = TRUE;
         } else if (type == APP_T_NAME) {
             size_t copy_len = (len < file_name_size - 1) ? len : file_name_size - 1;
             memcpy(file_name, &payload[idx], copy_len);
@@ -136,7 +201,6 @@ static int parse_control_packet(const unsigned char *payload,
         }
         idx += len;
     }
-
     return (saw_name && saw_size) ? 0 : -1;
 }
 
@@ -144,15 +208,13 @@ static int process_app_packet(const unsigned char *payload,
                               int payload_len,
                               AppRxState *app)
 {
-    if (payload_len < 1) {
-        return -1;
-    }
+    if (payload_len < 1) return -1;
 
     unsigned char control = payload[0];
 
     if (control == APP_START) {
-        char received_name[256] = {0};
-        size_t received_size = 0;
+        char   received_name[256] = {0};
+        size_t received_size      = 0;
         if (parse_control_packet(payload, payload_len, APP_START,
                                  received_name, sizeof(received_name),
                                  &received_size) < 0) {
@@ -162,7 +224,9 @@ static int process_app_packet(const unsigned char *payload,
 
         const char *base = safe_basename(received_name);
         snprintf(app->file_name, sizeof(app->file_name), "%s", base);
-        if (strlen(app->output_dir) + 4 + strlen(app->file_name) + 1 >= sizeof(app->output_path)) {
+
+        if (strlen(app->output_dir) + 4 + strlen(app->file_name) + 1
+            >= sizeof(app->output_path)) {
             fprintf(stderr, "Output path too long\n");
             return -1;
         }
@@ -173,21 +237,18 @@ static int process_app_packet(const unsigned char *payload,
                 sizeof(app->output_path) - strlen(app->output_path) - 1);
         strncat(app->output_path, app->file_name,
                 sizeof(app->output_path) - strlen(app->output_path) - 1);
+
         app->expected_size = received_size;
         app->bytes_written = 0;
-        app->ended = FALSE;
+        app->ended         = FALSE;
 
-        if (app->fp != NULL) {
-            fclose(app->fp);
-            app->fp = NULL;
-        }
+        if (app->fp != NULL) { fclose(app->fp); app->fp = NULL; }
 
         app->fp = fopen(app->output_path, "wb");
         if (app->fp == NULL) {
             perror(app->output_path);
             return -1;
         }
-
         app->started = TRUE;
         printf("START packet: file=%s size=%zu -> writing to %s\n",
                app->file_name, app->expected_size, app->output_path);
@@ -204,19 +265,14 @@ static int process_app_packet(const unsigned char *payload,
             fprintf(stderr, "Invalid DATA packet\n");
             return -1;
         }
-
         int k = ((int)payload[1] << 8) | payload[2];
         if (payload_len != 3 + k) {
             fprintf(stderr, "DATA length mismatch: header=%d actual=%d\n",
                     k, payload_len - 3);
             return -1;
         }
-
         size_t written = fwrite(&payload[3], 1, (size_t)k, app->fp);
-        if (written != (size_t)k) {
-            perror("fwrite");
-            return -1;
-        }
+        if (written != (size_t)k) { perror("fwrite"); return -1; }
         app->bytes_written += written;
         printf("DATA packet: wrote %d bytes (%zu/%zu)\n",
                k, app->bytes_written, app->expected_size);
@@ -225,31 +281,25 @@ static int process_app_packet(const unsigned char *payload,
     }
 
     if (control == APP_END) {
-        char received_name[256] = {0};
-        size_t received_size = 0;
+        char   received_name[256] = {0};
+        size_t received_size      = 0;
         if (parse_control_packet(payload, payload_len, APP_END,
                                  received_name, sizeof(received_name),
                                  &received_size) < 0) {
             fprintf(stderr, "Invalid END packet\n");
             return -1;
         }
-
         printf("END packet: file=%s size=%zu\n", received_name, received_size);
         printf("Receiver wrote %zu bytes to %s\n",
                app->bytes_written,
                app->output_path[0] ? app->output_path : "(unknown)");
         fflush(stdout);
 
-        if (app->fp != NULL) {
-            fclose(app->fp);
-            app->fp = NULL;
-        }
+        if (app->fp != NULL) { fclose(app->fp); app->fp = NULL; }
 
-        if (app->expected_size != app->bytes_written) {
+        if (app->expected_size != app->bytes_written)
             fprintf(stderr, "Warning: expected %zu bytes but wrote %zu bytes\n",
                     app->expected_size, app->bytes_written);
-        }
-
         app->ended = TRUE;
         return 0;
     }
@@ -258,34 +308,29 @@ static int process_app_packet(const unsigned char *payload,
     return -1;
 }
 
+/* ------------------------------------------------------------------ */
+/* Transmissor                                                           */
+/* ------------------------------------------------------------------ */
+
 static int run_transmitter(const ApplicationLayerConfig *config)
 {
     FILE *fp = fopen(config->input_file, "rb");
-    if (fp == NULL) {
-        perror(config->input_file);
-        return -1;
-    }
+    if (fp == NULL) { perror(config->input_file); return -1; }
 
-    if (fseek(fp, 0, SEEK_END) != 0) {
-        perror("fseek");
-        fclose(fp);
-        return -1;
-    }
+    if (fseek(fp, 0, SEEK_END) != 0) { perror("fseek"); fclose(fp); return -1; }
     long file_size_long = ftell(fp);
-    if (file_size_long < 0) {
-        perror("ftell");
-        fclose(fp);
-        return -1;
-    }
-    if (fseek(fp, 0, SEEK_SET) != 0) {
-        perror("fseek");
-        fclose(fp);
-        return -1;
-    }
+    if (file_size_long < 0) { perror("ftell"); fclose(fp); return -1; }
+    if (fseek(fp, 0, SEEK_SET) != 0) { perror("fseek"); fclose(fp); return -1; }
 
     size_t file_size = (size_t)file_size_long;
     printf("Sending file: %s (%zu bytes)\n", config->input_file, file_size);
     fflush(stdout);
+
+    /* ---------- Inicializar estatísticas ---------- */
+    PerfStats stats;
+    memset(&stats, 0, sizeof(stats));
+    stats.file_size  = file_size;
+    stats.baudrate   = 38400;   /* B38400 */
 
     LinkLayer ll;
     if (llopen(&ll, &config->link_config) < 0) {
@@ -296,27 +341,44 @@ static int run_transmitter(const ApplicationLayerConfig *config)
 
     unsigned char packet[LL_MAX_PAYLOAD_SIZE];
 
-    int start_len = build_control_packet(packet, APP_START, config->input_file, file_size);
+    /* ---------- START ---------- */
+    int start_len = build_control_packet(packet, APP_START,
+                                         config->input_file, file_size);
     if (start_len < 0 || llwrite(&ll, packet, start_len) < 0) {
         fprintf(stderr, "Failed to send START packet\n");
-        fclose(fp);
-        llclose(&ll);
-        return -1;
+        fclose(fp); llclose(&ll); return -1;
     }
+    stats.raw_bytes += (size_t)start_len;
 
+    /* ====== Início da medição de tempo ====== */
+    perf_start(&stats);
+
+    /* ---------- DATA ---------- */
     unsigned char chunk[APP_DATA_CHUNK];
     size_t total_sent = 0;
+
     while (1) {
         size_t n = fread(chunk, 1, sizeof(chunk), fp);
         if (n > 0) {
             int data_len = build_data_packet(packet, chunk, n);
-            if (data_len < 0 || llwrite(&ll, packet, data_len) < 0) {
-                fprintf(stderr, "Failed to send DATA packet\n");
-                fclose(fp);
-                llclose(&ll);
-                return -1;
+            if (data_len < 0) {
+                fprintf(stderr, "build_data_packet failed\n");
+                fclose(fp); llclose(&ll); return -1;
             }
-            total_sent += n;
+
+            /* llwrite devolve número de bytes enviados ou <0 em erro.
+             * Se o teu llwrite ainda devolve 0/1, ajusta aqui. */
+            int sent = llwrite(&ll, packet, data_len);
+            if (sent < 0) {
+                fprintf(stderr, "Failed to send DATA packet\n");
+                fclose(fp); llclose(&ll); return -1;
+            }
+
+            total_sent       += n;
+            stats.bytes_sent += n;
+            stats.raw_bytes  += (size_t)data_len;
+            stats.frames_sent++;
+
             printf("Progress: %zu/%zu bytes sent\n", total_sent, file_size);
             fflush(stdout);
         }
@@ -324,29 +386,40 @@ static int run_transmitter(const ApplicationLayerConfig *config)
         if (n < sizeof(chunk)) {
             if (ferror(fp)) {
                 perror("fread");
-                fclose(fp);
-                llclose(&ll);
-                return -1;
+                fclose(fp); llclose(&ll); return -1;
             }
             break;
         }
     }
 
-    int end_len = build_control_packet(packet, APP_END, config->input_file, file_size);
+    /* ====== Fim da medição de tempo ====== */
+    perf_stop(&stats);
+
+    /* ---------- END ---------- */
+    int end_len = build_control_packet(packet, APP_END,
+                                       config->input_file, file_size);
     if (end_len < 0 || llwrite(&ll, packet, end_len) < 0) {
         fprintf(stderr, "Failed to send END packet\n");
-        fclose(fp);
-        llclose(&ll);
-        return -1;
+        fclose(fp); llclose(&ll); return -1;
     }
+    stats.raw_bytes += (size_t)end_len;
 
     fclose(fp);
+
     if (llclose(&ll) < 0) {
         fprintf(stderr, "Failed to close connection cleanly\n");
         return -1;
     }
+
+    /* ---------- Imprimir métricas ---------- */
+    perf_print(&stats);
+
     return 0;
 }
+
+/* ------------------------------------------------------------------ */
+/* Receptor                                                             */
+/* ------------------------------------------------------------------ */
 
 static int run_receiver(const ApplicationLayerConfig *config)
 {
@@ -364,29 +437,47 @@ static int run_receiver(const ApplicationLayerConfig *config)
     printf("Output directory: %s\n", app.output_dir);
     fflush(stdout);
 
+    /* ---------- Inicializar estatísticas ---------- */
+    PerfStats stats;
+    memset(&stats, 0, sizeof(stats));
+    stats.baudrate = 38400;
+
     unsigned char payload[LL_MAX_PAYLOAD_SIZE];
-    int finished = FALSE;
+    int finished   = FALSE;
+    int data_phase = FALSE;   /* para medir apenas a fase de dados */
 
     while (!finished) {
         int len = llread(&ll, payload, sizeof(payload));
         if (len < 0) {
             fprintf(stderr, "llread failed\n");
-            if (app.fp != NULL) {
-                fclose(app.fp);
-            }
+            if (app.fp != NULL) fclose(app.fp);
             llclose(&ll);
             return -1;
+        }
+
+        /* Iniciar temporizador no primeiro pacote DATA */
+        if (len > 0 && payload[0] == APP_DATA && !data_phase) {
+            data_phase = TRUE;
+            perf_start(&stats);
         }
 
         if (process_app_packet(payload, len, &app) < 0) {
-            if (app.fp != NULL) {
-                fclose(app.fp);
-            }
+            if (app.fp != NULL) fclose(app.fp);
             llclose(&ll);
             return -1;
         }
 
+        /* Contabilizar bytes */
+        stats.raw_bytes += (size_t)len;
+        if (len > 0 && payload[0] == APP_DATA) {
+            int k = ((int)payload[1] << 8) | payload[2];
+            stats.bytes_sent += (size_t)k;
+            stats.frames_sent++;
+        }
+
         if (app.ended) {
+            perf_stop(&stats);
+            stats.file_size = app.bytes_written;
             finished = TRUE;
         }
     }
@@ -395,14 +486,20 @@ static int run_receiver(const ApplicationLayerConfig *config)
         fprintf(stderr, "Failed to close receiver connection cleanly\n");
         return -1;
     }
+
+    /* ---------- Imprimir métricas ---------- */
+    perf_print(&stats);
+
     return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Ponto de entrada                                                     */
+/* ------------------------------------------------------------------ */
+
 int application_layer_run(const ApplicationLayerConfig *config)
 {
-    if (config == NULL) {
-        return -1;
-    }
+    if (config == NULL) return -1;
 
     if (config->link_config.role == LL_ROLE_TX) {
         if (config->input_file == NULL) {
