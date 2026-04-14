@@ -2,3 +2,278 @@ PAYLODE_SIZE = 256
 
 FER = 0 && DELAY = 0
 
+╔══════════════════════════════════════════════╗
+║            MÉTRICAS DE DESEMPENHO            ║
+╚══════════════════════════════════════════════╝
+  Tamanho do ficheiro  : 68483 bytes
+  Payload útil enviado : 68483 bytes
+  Bytes brutos na linha: 69426 bytes
+  I-frames enviadas    : 271
+  Retransmissões       : 0
+  Tempo de transferência: 20.0435 s
+  Débito (throughput)  : 3416.71 bytes/s  (3.34 kbytes/s)
+  Débito em bits/s     : 27333.69 bps
+  Eficiência (dados/raw): 98.64 %
+  Goodput / capacidade : 71.18 %  (a 38400 bps)
+  Taxa de retransmissão: 0.00 %
+────────────────────────────────────────────────
+
+PAYLODE_SIZE = 128
+
+FER = 0 && DELAY = 0
+
+╔══════════════════════════════════════════════╗
+║            MÉTRICAS DE DESEMPENHO            ║
+╚══════════════════════════════════════════════╝
+  Tamanho do ficheiro  : 68483 bytes
+  Payload útil enviado : 68483 bytes
+  Bytes brutos na linha: 70257 bytes
+  I-frames enviadas    : 548
+  Retransmissões       : 0
+  Tempo de transferência: 21.6402 s
+  Débito (throughput)  : 3164.62 bytes/s  (3.09 kbytes/s)
+  Débito em bits/s     : 25316.98 bps
+  Eficiência (dados/raw): 97.47 %
+  Goodput / capacidade : 65.93 %  (a 38400 bps)
+  Taxa de retransmissão: 0.00 %
+────────────────────────────────────────────────
+
+PAYLOAD_SIZE = 512
+
+FER = 0 && DELAY = 0
+
+╔══════════════════════════════════════════════╗
+║            MÉTRICAS DE DESEMPENHO            ║
+╚══════════════════════════════════════════════╝
+  Tamanho do ficheiro  : 68483 bytes
+  Payload útil enviado : 68483 bytes
+  Bytes brutos na linha: 69018 bytes
+  I-frames enviadas    : 135
+  Retransmissões       : 0
+  Tempo de transferência: 19.2682 s
+  Débito (throughput)  : 3554.20 bytes/s  (3.47 kbytes/s)
+  Débito em bits/s     : 28433.60 bps
+  Eficiência (dados/raw): 99.22 %
+  Goodput / capacidade : 74.05 %  (a 38400 bps)
+  Taxa de retransmissão: 0.00 %
+────────────────────────────────────────────────
+
+PAYLOAD_SIZE = 1024
+
+FER = 0 && DELAY = 0
+
+╔══════════════════════════════════════════════╗
+║            MÉTRICAS DE DESEMPENHO            ║
+╚══════════════════════════════════════════════╝
+  Tamanho do ficheiro  : 68483 bytes
+  Payload útil enviado : 68483 bytes
+  Bytes brutos na linha: 68817 bytes
+  I-frames enviadas    : 68
+  Retransmissões       : 0
+  Tempo de transferência: 18.7722 s
+  Débito (throughput)  : 3648.11 bytes/s  (3.56 kbytes/s)
+  Débito em bits/s     : 29184.86 bps
+  Eficiência (dados/raw): 99.51 %
+  Goodput / capacidade : 76.00 %  (a 38400 bps)
+  Taxa de retransmissão: 0.00 %
+────────────────────────────────────────────────
+
+PAYLOAD_SIZE = 2048
+
+FER = 0 && DELAY = 0
+
+╔══════════════════════════════════════════════╗
+║            MÉTRICAS DE DESEMPENHO            ║
+╚══════════════════════════════════════════════╝
+  Tamanho do ficheiro  : 68483 bytes
+  Payload útil enviado : 68483 bytes
+  Bytes brutos na linha: 68715 bytes
+  I-frames enviadas    : 34
+  Retransmissões       : 0
+  Tempo de transferência: 18.3071 s
+  Débito (throughput)  : 3740.80 bytes/s  (3.65 kbytes/s)
+  Débito em bits/s     : 29926.36 bps
+  Eficiência (dados/raw): 99.66 %
+  Goodput / capacidade : 77.93 %  (a 38400 bps)
+  Taxa de retransmissão: 0.00 %
+────────────────────────────────────────────────
+
+PAYLOAD_SIZE = 256
+
+FER = 0.2 && DELAY = 0
+
+╔══════════════════════════════════════════════╗
+║            MÉTRICAS DE DESEMPENHO            ║
+╚══════════════════════════════════════════════╝
+  Tamanho do ficheiro  : 68483 bytes
+  Payload útil enviado : 68483 bytes
+  Bytes brutos na linha: 69426 bytes
+  I-frames enviadas    : 271
+  Retransmissões       : 69
+  Tempo de transferência: 31.1412 s
+  Débito (throughput)  : 2199.11 bytes/s  (2.15 kbytes/s)
+  Débito em bits/s     : 17592.88 bps
+  Eficiência (dados/raw): 98.64 %
+  Goodput / capacidade : 45.81 %  (a 38400 bps)
+  Taxa de retransmissão: 25.46 %
+────────────────────────────────────────────────
+
+PAYLOAD_SIZE = 256
+
+FER = 0.4 && DELAY = 0
+
+╔══════════════════════════════════════════════╗
+║            MÉTRICAS DE DESEMPENHO            ║
+╚══════════════════════════════════════════════╝
+  Tamanho do ficheiro  : 68483 bytes
+  Payload útil enviado : 68483 bytes
+  Bytes brutos na linha: 69426 bytes
+  I-frames enviadas    : 271
+  Retransmissões       : 171
+  Tempo de transferência: 38.6362 s
+  Débito (throughput)  : 1772.51 bytes/s  (1.73 kbytes/s)
+  Débito em bits/s     : 14180.06 bps
+  Eficiência (dados/raw): 98.64 %
+  Goodput / capacidade : 36.93 %  (a 38400 bps)
+  Taxa de retransmissão: 63.09 %
+────────────────────────────────────────────────
+
+PAYLOAD_SIZE = 256
+
+FER = 0.6 && DELAY = 0
+
+╔══════════════════════════════════════════════╗
+║            MÉTRICAS DE DESEMPENHO            ║
+╚══════════════════════════════════════════════╝
+  Tamanho do ficheiro  : 68483 bytes
+  Payload útil enviado : 68483 bytes
+  Bytes brutos na linha: 69426 bytes
+  I-frames enviadas    : 271
+  Retransmissões       : 391
+  Tempo de transferência: 66.8249 s
+  Débito (throughput)  : 1024.81 bytes/s  (1.00 kbytes/s)
+  Débito em bits/s     : 8198.50 bps
+  Eficiência (dados/raw): 98.64 %
+  Goodput / capacidade : 21.35 %  (a 38400 bps)
+  Taxa de retransmissão: 144.28 %
+────────────────────────────────────────────────
+
+PAYLOAD_SIZE = 256
+
+FER = 0.8 && DELAY = 0
+
+╔══════════════════════════════════════════════╗
+║            MÉTRICAS DE DESEMPENHO            ║
+╚══════════════════════════════════════════════╝
+  Tamanho do ficheiro  : 68483 bytes
+  Payload útil enviado : 68483 bytes
+  Bytes brutos na linha: 69426 bytes
+  I-frames enviadas    : 271
+  Retransmissões       : 1072
+  Tempo de transferência: 122.9921 s
+  Débito (throughput)  : 556.81 bytes/s  (0.54 kbytes/s)
+  Débito em bits/s     : 4454.47 bps
+  Eficiência (dados/raw): 98.64 %
+  Goodput / capacidade : 11.60 %  (a 38400 bps)
+  Taxa de retransmissão: 395.57 %
+────────────────────────────────────────────────
+
+PAYLOAD_SIZE = 256
+
+FER = 0 && DELAY = 200 (ms)
+
+╔══════════════════════════════════════════════╗
+║            MÉTRICAS DE DESEMPENHO            ║
+╚══════════════════════════════════════════════╝
+  Tamanho do ficheiro  : 68483 bytes
+  Payload útil enviado : 68483 bytes
+  Bytes brutos na linha: 69426 bytes
+  I-frames enviadas    : 271
+  Retransmissões       : 0
+  Tempo de transferência: 74.2842 s
+  Débito (throughput)  : 921.91 bytes/s  (0.90 kbytes/s)
+  Débito em bits/s     : 7375.24 bps
+  Eficiência (dados/raw): 98.64 %
+  Goodput / capacidade : 19.21 %  (a 38400 bps)
+  Taxa de retransmissão: 0.00 %
+────────────────────────────────────────────────
+
+PAYLOAD_SIZE = 256
+
+FER = 0 && DELAY = 400 (ms)
+
+╔══════════════════════════════════════════════╗
+║            MÉTRICAS DE DESEMPENHO            ║
+╚══════════════════════════════════════════════╝
+  Tamanho do ficheiro  : 68483 bytes
+  Payload útil enviado : 68483 bytes
+  Bytes brutos na linha: 69426 bytes
+  I-frames enviadas    : 271
+  Retransmissões       : 0
+  Tempo de transferência: 128.4642 s
+  Débito (throughput)  : 533.09 bytes/s  (0.52 kbytes/s)
+  Débito em bits/s     : 4264.72 bps
+  Eficiência (dados/raw): 98.64 %
+  Goodput / capacidade : 11.11 %  (a 38400 bps)
+  Taxa de retransmissão: 0.00 %
+────────────────────────────────────────────────
+
+PAYLOAD_SIZE = 256
+
+FER = 0 && DELAY = 600
+
+╔══════════════════════════════════════════════╗
+║            MÉTRICAS DE DESEMPENHO            ║
+╚══════════════════════════════════════════════╝
+  Tamanho do ficheiro  : 68483 bytes
+  Payload útil enviado : 68483 bytes
+  Bytes brutos na linha: 69426 bytes
+  I-frames enviadas    : 271
+  Retransmissões       : 0
+  Tempo de transferência: 182.6562 s
+  Débito (throughput)  : 374.93 bytes/s  (0.37 kbytes/s)
+  Débito em bits/s     : 2999.43 bps
+  Eficiência (dados/raw): 98.64 %
+  Goodput / capacidade : 7.81 %  (a 38400 bps)
+  Taxa de retransmissão: 0.00 %
+────────────────────────────────────────────────
+
+PAYLOAD_SIZE = 256
+
+FER = 0 && DELAY = 800 (ms)
+
+╔══════════════════════════════════════════════╗
+║            MÉTRICAS DE DESEMPENHO            ║
+╚══════════════════════════════════════════════╝
+  Tamanho do ficheiro  : 68483 bytes
+  Payload útil enviado : 68483 bytes
+  Bytes brutos na linha: 69426 bytes
+  I-frames enviadas    : 271
+  Retransmissões       : 0
+  Tempo de transferência: 240.6402 s
+  Débito (throughput)  : 284.59 bytes/s  (0.28 kbytes/s)
+  Débito em bits/s     : 2276.69 bps
+  Eficiência (dados/raw): 98.64 %
+  Goodput / capacidade : 5.93 %  (a 38400 bps)
+  Taxa de retransmissão: 0.00 %
+────────────────────────────────────────────────
+
+PAYLOAD_SIZE = 256
+
+FER = 0 && DELAY = 1000 (ms)
+
+╔══════════════════════════════════════════════╗
+║            MÉTRICAS DE DESEMPENHO            ║
+╚══════════════════════════════════════════════╝
+  Tamanho do ficheiro  : 68483 bytes
+  Payload útil enviado : 68483 bytes
+  Bytes brutos na linha: 69426 bytes
+  I-frames enviadas    : 271
+  Retransmissões       : 0
+  Tempo de transferência: 291.0323 s
+  Débito (throughput)  : 235.31 bytes/s  (0.23 kbytes/s)
+  Débito em bits/s     : 1882.48 bps
+  Eficiência (dados/raw): 98.64 %
+  Goodput / capacidade : 4.90 %  (a 38400 bps)
+  Taxa de retransmissão: 0.00 %
+────────────────────────────────────────────────
