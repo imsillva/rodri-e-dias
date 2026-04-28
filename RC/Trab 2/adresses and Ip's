@@ -6,4 +6,17 @@ IP - 172.16.30.1/24
   Tux 4
 
 MAC Address - ec:75:0c:c2:26:49
-IP - 172.16.30.254
+IP - 172.16.30.254/24
+
+
+Experiência 3 
+
+TUX 4 
+eh1
+MAC Address - ec:75:0c:c2:26:49
+IP - 172.16.30.254/24
+
+TUX 4
+eh2
+MAC Adress - ec:75:0c:c2:3c:f3
+IP - 172.16.31.253/24
