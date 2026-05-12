@@ -20,3 +20,7 @@ TUX 4
 eh2
 MAC Adress - ec:75:0c:c2:3c:f3
 IP - 172.16.31.253/24
+
+TUX 2
+if_e1
+IP - 172.16.31.1/24
